@@ -1,4 +1,5 @@
 import os 
+import gc
 import torch
 import pandas as pd
 from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
@@ -40,6 +41,8 @@ def mcc_loss(x, reweight=False, dim=2, class_num=32):
 
     cov_matrix_t = cov_matrix_t / torch.sum(cov_matrix_t, dim=1)
     mcc_loss = (torch.sum(cov_matrix_t) - torch.trace(cov_matrix_t)) / class_num
+    del cov_matrix_t
+    gc.collect()
    
     return mcc_loss
 
