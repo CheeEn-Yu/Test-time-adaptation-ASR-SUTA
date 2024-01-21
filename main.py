@@ -453,12 +453,3 @@ if __name__ == '__main__':
     df = pd.DataFrame({'duration': durations, 'WERR': werrs})
     df.to_csv(csv_path)
     
-
-
-
-
-
-
-
-
-
