@@ -15,30 +15,6 @@ from tqdm import tqdm
 from main import *
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
-class LibriSpeech(torch.utils.data.Dataset):
-    """
-    A simple class to wrap LibriSpeech and trim/pad the audio to 30 seconds.
-    It will drop the last few seconds of a very small portion of the utterances.
-    """
-    def __init__(self, split="test-clean", device=DEVICE):
-        self.dataset = torchaudio.datasets.LIBRISPEECH(
-            root=os.path.expanduser("~/.cache"),
-            url=split,
-            download=True,
-        )
-        self.device = device
-
-    def __len__(self):
-        return len(self.dataset)
-
-    def __getitem__(self, item):
-        audio, sample_rate, text, _, _, _ = self.dataset[item]
-        assert sample_rate == 16000
-        audio = pad_or_trim(audio.flatten()).to(self.device)
-        mel = log_mel_spectrogram(audio)
-        
-        return (mel, text)
     
 def collect_params(model):
     # collect trainable params
@@ -110,10 +86,12 @@ def forward_and_adapt(x, model, optimizer, em_coef=1.0, reweight=False, temp=1.,
 
 if __name__ == '__main__':
     # load datasets
-    dataset = LibriSpeech("test-clean")
+    # dataset = LibriSpeech("test-clean")
+    from data import load_dataset
+    dataset = load_dataset(split=['test-other'], name='librispeech', path='../LibriSpeech', batch_size=1, extra_noise=0.01)
     loader = torch.utils.data.DataLoader(dataset, batch_size=1)
     # load models
-    model = whisper.load_model("base.en")
+    model = whisper.load_model("tiny.en")
     params, names = collect_params(model)
     model = model.to(DEVICE)
     options = whisper.DecodingOptions(language="en", without_timestamps=True)
@@ -122,11 +100,16 @@ if __name__ == '__main__':
     transcriptions = []
     ori_transcriptions = []
     model_state, optimizer_state, scheduler_state = copy_model_and_optimizer(model, optimizer, scheduler)
-    for mels, texts in tqdm(loader):
-        outputs = model.decode(mels, options)
+    for batch in tqdm(dataset):
+        lens, wavs, texts, files = batch
+        wavs = pad_or_trim(wavs[0])
+        mel = log_mel_spectrogram(wavs)
+        mel = mel.unsqueeze(-1)
+        mel = mel.permute(2,0,1).to(DEVICE)
+        outputs = model.decode(mel, options)
         model, optimizer, scheduler = load_model_and_optimizer(model, optimizer, scheduler, model_state, optimizer_state, scheduler_state)
         for i in range(10):
-            adapt_output = forward_and_adapt(mels, model, optimizer)
+            adapt_output = forward_and_adapt(mel, model, optimizer)
         transcriptions.append(adapt_output[0][0].text)
         ori_transcriptions.append(texts[0])
         del outputs, adapt_output
