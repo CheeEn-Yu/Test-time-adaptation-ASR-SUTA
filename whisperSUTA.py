@@ -15,19 +15,62 @@ from main import *
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
+def forward_and_adapt(x, model, optimizer, em_coef=0.9, reweight=False, temp=1., not_blank=True, scheduler=None, 
+                        div_coef=0, repeat_inference=True, skip_short_thd=None):
+    """Forward and adapt model on batch of data.
+
+    Measure entropy of the model prediction, take gradients, and update params.
+
+    the index of <pad> in vocab is 0
+    """
+    # forward
+    outputs = model.decode(x, options)
+    logits = torch.stack(outputs[1], dim=0)
+    logits=logits.permute(1,0,2) # torch.Size([1, 5, 51864])
+    # adapt
+    loss = 0
+
+    if em_coef > 0: 
+        e_loss = softmax_entropy(logits / temp).mean(0).mean() 
+        
+        loss += e_loss * em_coef
+
+    if 1 - em_coef > 0: 
+        c_loss = mcc_loss(logits / temp, reweight)
+        loss += c_loss * (1 - em_coef)
+
+    if div_coef > 0: 
+        d_loss = div_loss(logits, not_blank) 
+        loss += d_loss * div_coef 
+
+    loss.backward()
+    optimizer.step()
+    if scheduler is not None: 
+        scheduler.step()
+    model.zero_grad()
+
+    # inference again
+    if repeat_inference:
+        with torch.no_grad():
+            outputs = model.decode(x, options)
+    return outputs
+
+
 model = whisper.load_model("base.en")
+
+
 # collect trainable params
 params = []
 names = []
-trainable = ['weight', 'bias']
 
 for name, param in model.named_parameters():
     param.requires_grad = False
 
 for nm, m in model.named_modules():
     # print(str(nm).split('.'))
+    trainable = ['weight', 'bias']
     # train_LN
-    if isinstance(m, nn.LayerNorm):
+    if isinstance(m, nn.LayerNorm) and str(nm).split('.')[0] == 'encoder':
         for np, p in m.named_parameters():
             if np in trainable:  
                 p.requires_grad = True
@@ -40,47 +83,22 @@ for nm, m in model.named_modules():
                 p.requires_grad = True
                 params.append(p)
                 names.append(f"{nm}.{np}")
-print(f'trainable layer: {names}')
-
 # check trainable parameter
 # for name, param in model.named_parameters():
 #     print("name: ", name)
 #     print("requires_grad: ", param.requires_grad)
 
 # load audio
-model = model.to(DEVICE)
 options = whisper.DecodingOptions(language="en", without_timestamps=True)
+optimizer, scheduler = setup_optimizer(params, 'AdamW', lr=3e-4, scheduler=None)
 audio = load_audio(file='./p232_022.wav')
 audio = pad_or_trim(audio)
 mel = log_mel_spectrogram(audio)
 mel = mel.unsqueeze(-1)
 mel = mel.permute(2,0,1)
 
-# forward
+
+model = model.to(DEVICE)
 mel = mel.to(DEVICE)
-outputs = model.decode(mel, options)
-print(f'before TTA: {outputs}')
-
-steps = 10
-optimizer, scheduler = setup_optimizer(params, 'AdamW', lr=0.1, scheduler=None)
-model.train()
-for i in range(steps):
-    outputs = model.decode(mel, options)
-    result_tensor = torch.stack(outputs[1], dim=0)
-    result_tensor=result_tensor.permute(1,0,2) # torch.Size([1, 5, 51864])
-
-    e_loss = softmax_entropy(result_tensor).mean(0).mean()
-    # c_loss = mcc_loss(result_tensor, reweight=False)
-    loss = 0
-    loss += e_loss * 1000
-    loss.requires_grad = True
-    loss.backward()
-    optimizer.step()
-    if scheduler is not None: 
-        scheduler.step()
-    model.zero_grad()
-    print(loss)
-    
-    # with torch.no_grad():
-        # outputs = model.decode(mel, options)
-        # print(outputs[1])
+test1 = forward_and_adapt(mel, model, optimizer)
+print(test1)

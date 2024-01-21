@@ -694,7 +694,7 @@ class DecodingTask:
 
                 # now we need to consider the logits at the last token only
                 logits = logits[:, -1]
-                original_logits = logits.clone().detach().requires_grad_(False)
+                original_logits = logits.clone()
                 logits_arr.append(original_logits) # 此時logit.shape = (1,51864)
 
 
