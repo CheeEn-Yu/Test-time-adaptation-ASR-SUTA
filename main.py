@@ -147,7 +147,7 @@ def copy_model_and_optimizer(model, optimizer, scheduler):
     else:
         return model_state, optimizer_state, None
 
-def load_model_and_optimizer(model, optimizer, model_state, optimizer_state, scheduler_state):
+def load_model_and_optimizer(model, optimizer, scheduler, model_state, optimizer_state, scheduler_state):
     """Restore the model and optimizer states from copies."""
     model.load_state_dict(model_state, strict=True)
     optimizer.load_state_dict(optimizer_state)
