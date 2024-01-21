@@ -1,6 +1,5 @@
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Sequence, Tuple, Union
-import copy
 
 import numpy as np
 import torch
@@ -60,7 +59,7 @@ def detect_language(
     # collect detected languages; suppress all non-language tokens
     mask = torch.ones(logits.shape[-1], dtype=torch.bool)
     mask[list(tokenizer.all_language_tokens)] = False
-    logits[:, mask] = -1e20
+    logits[:, mask] = -np.inf
     language_tokens = logits.argmax(dim=-1)
     language_token_probs = logits.softmax(dim=-1).cpu()
     language_probs = [
@@ -428,7 +427,7 @@ class SuppressBlank(LogitFilter):
 
     def apply(self, logits: Tensor, tokens: Tensor):
         if tokens.shape[1] == self.sample_begin:
-            logits[:, self.tokenizer.encode(" ") + [self.tokenizer.eot]] = -1e20
+            logits[:, self.tokenizer.encode(" ") + [self.tokenizer.eot]] = -np.inf
 
 
 class SuppressTokens(LogitFilter):
@@ -436,7 +435,7 @@ class SuppressTokens(LogitFilter):
         self.suppress_tokens = list(suppress_tokens)
 
     def apply(self, logits: Tensor, tokens: Tensor):
-        logits[:, self.suppress_tokens] = -1e20
+        logits[:, self.suppress_tokens] = -np.inf
 
 
 class ApplyTimestampRules(LogitFilter):
@@ -453,7 +452,7 @@ class ApplyTimestampRules(LogitFilter):
     def apply(self, logits: Tensor, tokens: Tensor):
         # suppress <|notimestamps|> which is handled by without_timestamps
         if self.tokenizer.no_timestamps is not None:
-            logits[:, self.tokenizer.no_timestamps] = -1e20
+            logits[:, self.tokenizer.no_timestamps] = -np.inf
 
         # timestamps have to appear in pairs, except directly before EOT; mask logits accordingly
         for k in range(tokens.shape[0]):
@@ -468,9 +467,9 @@ class ApplyTimestampRules(LogitFilter):
 
             if last_was_timestamp:
                 if penultimate_was_timestamp:  # has to be non-timestamp
-                    logits[k, self.tokenizer.timestamp_begin :] = -1e20
+                    logits[k, self.tokenizer.timestamp_begin :] = -np.inf
                 else:  # cannot be normal text tokens
-                    logits[k, : self.tokenizer.eot] = -1e20
+                    logits[k, : self.tokenizer.eot] = -np.inf
 
             timestamps = sampled_tokens[
                 sampled_tokens.ge(self.tokenizer.timestamp_begin)
@@ -482,18 +481,18 @@ class ApplyTimestampRules(LogitFilter):
                     timestamp_last = timestamps[-1]
                 else:
                     timestamp_last = timestamps[-1] + 1
-                logits[k, self.tokenizer.timestamp_begin : timestamp_last] = -1e20
+                logits[k, self.tokenizer.timestamp_begin : timestamp_last] = -np.inf
 
         if tokens.shape[1] == self.sample_begin:
             # suppress generating non-timestamp tokens at the beginning
-            logits[:, : self.tokenizer.timestamp_begin] = -1e20
+            logits[:, : self.tokenizer.timestamp_begin] = -np.inf
 
             # apply the `max_initial_timestamp` option
             if self.max_initial_timestamp_index is not None:
                 last_allowed = (
                     self.tokenizer.timestamp_begin + self.max_initial_timestamp_index
                 )
-                logits[:, last_allowed + 1 :] = -1e20
+                logits[:, last_allowed + 1 :] = -np.inf
 
         # if sum of probability over timestamps is above any other token, sample timestamp
         logprobs = F.log_softmax(logits.float(), dim=-1)
@@ -503,7 +502,7 @@ class ApplyTimestampRules(LogitFilter):
             )
             max_text_token_logprob = logprobs[k, : self.tokenizer.timestamp_begin].max()
             if timestamp_logprob > max_text_token_logprob:
-                logits[k, : self.tokenizer.timestamp_begin] = -1e20
+                logits[k, : self.tokenizer.timestamp_begin] = -np.inf
 
 
 class DecodingTask:
@@ -695,11 +694,13 @@ class DecodingTask:
 
                 # now we need to consider the logits at the last token only
                 logits = logits[:, -1]
+                original_logits = logits.clone().detach().requires_grad_(False)
+                logits_arr.append(original_logits) # 此時logit.shape = (1,51864)
+
 
                 # apply the logit filters, e.g. for suppressing or applying penalty to
                 for logit_filter in self.logit_filters:
                     logit_filter.apply(logits, tokens)
-                logits_arr.append(logits) # 此時logit.shape = (1,51864)
 
                 # expand the tokens tensor with the selected next tokens
                 tokens, completed = self.decoder.update(tokens, logits, sum_logprobs)
