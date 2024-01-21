@@ -711,7 +711,7 @@ class DecodingTask:
 
         return tokens, sum_logprobs, no_speech_probs, logits_arr
 
-    @torch.no_grad()
+    # @torch.no_grad()
     def run(self, mel: Tensor) -> List[DecodingResult]:
         self.decoder.reset()
         tokenizer: Tokenizer = self.tokenizer
@@ -791,7 +791,7 @@ class DecodingTask:
         ], logits_arr
 
 
-@torch.no_grad()
+# @torch.no_grad()
 def decode(
     model: "Whisper",
     mel: Tensor,
