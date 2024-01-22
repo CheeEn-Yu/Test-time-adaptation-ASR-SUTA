@@ -93,7 +93,7 @@ if __name__ == '__main__':
         outputs = model.decode(mel, options)
         model, optimizer, scheduler = load_model_and_optimizer(model, optimizer, scheduler, model_state, optimizer_state, scheduler_state)
         for i in range(10):
-            adapt_output = forward_and_adapt(mel, model, optimizer, em_coef, reweight, temp, non_blank, scheduler, div_coef,is_whisper, options)
+            adapt_output = forward_and_adapt(mel, model, optimizer, em_coef, reweight, temp, non_blank, scheduler, div_coef,is_whisper=is_whisper, options=options)
             if i == 0:
                 transcriptions_1.append(adapt_output[0][0].text)
             if i == 2:

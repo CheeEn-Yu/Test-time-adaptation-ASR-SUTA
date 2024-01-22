@@ -198,7 +198,7 @@ def configure_model(model):
     return model
 
 def forward_and_adapt(x, model, optimizer, em_coef=0.9, reweight=False, temp=1., not_blank=True, scheduler=None, 
-                        div_coef=0, repeat_inference=True, skip_short_thd=None, is_whisper=False, options=None):
+                        div_coef=0, repeat_inference=True, skip_short_thd=None, is_whisper=True, options=None):
     """Forward and adapt model on batch of data.
 
     Measure entropy of the model prediction, take gradients, and update params.
