@@ -88,7 +88,7 @@ if __name__ == '__main__':
     # load datasets
     # dataset = LibriSpeech("test-clean")
     from data import load_dataset
-    dataset = load_dataset(split=['test-other'], name='librispeech', path='../LibriSpeech', batch_size=1, extra_noise=0.01)
+    dataset = load_dataset(split=['test-other'], name='librispeech', path='./LibriSpeech', batch_size=1, extra_noise=0.)
     loader = torch.utils.data.DataLoader(dataset, batch_size=1)
     # load models
     model = whisper.load_model("tiny.en")
@@ -108,7 +108,7 @@ if __name__ == '__main__':
         mel = mel.permute(2,0,1).to(DEVICE)
         outputs = model.decode(mel, options)
         model, optimizer, scheduler = load_model_and_optimizer(model, optimizer, scheduler, model_state, optimizer_state, scheduler_state)
-        for i in range(5):
+        for i in range(10):
             adapt_output = forward_and_adapt(mel, model, optimizer)
         transcriptions.append(adapt_output[0][0].text)
         ori_transcriptions.append(texts[0])
