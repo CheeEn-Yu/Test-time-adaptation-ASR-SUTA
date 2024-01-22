@@ -108,7 +108,7 @@ if __name__ == '__main__':
         mel = mel.permute(2,0,1).to(DEVICE)
         outputs = model.decode(mel, options)
         model, optimizer, scheduler = load_model_and_optimizer(model, optimizer, scheduler, model_state, optimizer_state, scheduler_state)
-        for i in range(10):
+        for i in range(5):
             adapt_output = forward_and_adapt(mel, model, optimizer)
         transcriptions.append(adapt_output[0][0].text)
         ori_transcriptions.append(texts[0])
@@ -123,6 +123,6 @@ if __name__ == '__main__':
 
     data["hypothesis_clean"] = [normalizer(text) for text in data["hypothesis"]]
     data["reference_clean"] = [normalizer(text) for text in data["reference"]]
-
+    data.to_csv('step5.csv')
     wer = jiwer.wer(list(data["reference_clean"]), list(data["hypothesis_clean"]))
     print(f"WER: {wer * 100:.2f} %")
