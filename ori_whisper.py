@@ -17,9 +17,8 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 if __name__ == '__main__':
     # load datasets
-    # dataset = LibriSpeech("test-clean")
     from data import load_dataset
-    dataset = load_dataset(split=['test-other'], name='librispeech', path='../LibriSpeech', batch_size=1, extra_noise=0.01)
+    dataset = load_dataset(split=['test-other'], name='librispeech', path='../LibriSpeech', batch_size=1, extra_noise=0.005)
     loader = torch.utils.data.DataLoader(dataset, batch_size=1)
     # load models
     model = whisper.load_model("tiny.en")
@@ -50,6 +49,6 @@ if __name__ == '__main__':
 
     data["hypothesis_clean"] = [normalizer(text) for text in data["hypothesis"]]
     data["reference_clean"] = [normalizer(text) for text in data["reference"]]
-
+    data.to_csv('./tiny_LS0.005.csv')
     wer = jiwer.wer(list(data["reference_clean"]), list(data["hypothesis_clean"]))
     print(f"WER: {wer * 100:.2f} %")
