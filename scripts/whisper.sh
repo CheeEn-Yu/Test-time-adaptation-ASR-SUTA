@@ -1,0 +1,13 @@
+python main.py  --steps 10 \
+                --dataset_name librispeech \
+                --dataset_dir ./LibriSpeech \
+                --temp 2.5 \
+                --episodic \
+                --non_blank \
+                --em_coef 1.0 \
+                --reweight \
+                --log_dir exps \
+                --lr 2e-5 \
+                --train_feature \
+                --extra_noise 0.005 \
+                --is_whisper True
