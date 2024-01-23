@@ -1,6 +1,6 @@
 python main.py  --steps 10 \
                 --dataset_name librispeech \
-                --dataset_dir ./LibriSpeech \
+                --dataset_dir  /home/allen172/Test-time-adaptation-ASR-SUTA/LibriSpeech \
                 --temp 2.5 \
                 --episodic \
                 --non_blank \
