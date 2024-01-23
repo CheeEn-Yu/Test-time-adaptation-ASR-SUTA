@@ -226,7 +226,7 @@ def forward_and_adapt(x, model, optimizer, em_coef=0.9, reweight=False, temp=1.,
             else: 
                 e_loss = softmax_entropy(outputs / temp).mean(0).mean() 
         else:
-            e_loss = softmax_entropy(outputs / temp).mean(0).mean()
+            e_loss = softmax_entropy(logits / temp).mean(0).mean()
         loss += e_loss * em_coef
 
     if 1 - em_coef > 0: 
@@ -245,8 +245,13 @@ def forward_and_adapt(x, model, optimizer, em_coef=0.9, reweight=False, temp=1.,
 
     # inference again
     if repeat_inference:
-        with torch.no_grad():
-            outputs = model(x).logits
+        if not is_whisper:
+            with torch.no_grad():
+                outputs = model(x).logits
+        else:
+            with torch.no_grad():
+                outputs = model.decode(x, options)
+
     return outputs
 
 import argparse
