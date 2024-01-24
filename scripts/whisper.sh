@@ -9,5 +9,5 @@ python main.py  --steps 10 \
                 --log_dir exps \
                 --lr 2e-5 \
                 --train_feature \
-                --extra_noise 0.005 \
+                --extra_noise 0. \
                 --is_whisper True

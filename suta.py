@@ -114,7 +114,7 @@ def whisper_collect_params(model):
     for nm, m in model.named_modules():
         trainable = ['weight', 'bias']
         # train_LN
-        if isinstance(m, nn.LayerNorm) and str(nm).split('.')[0] == 'encoder':
+        if isinstance(m, nn.LayerNorm):
             for np, p in m.named_parameters():
                 if np in trainable:  
                     p.requires_grad = True
