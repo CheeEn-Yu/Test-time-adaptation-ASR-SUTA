@@ -121,13 +121,15 @@ if __name__ == '__main__':
     data["step10_clean"] = [normalizer(text) for text in data["step10"]]
     data["reference_clean"] = [normalizer(text) for text in data["reference"]]
 
-    exp_name = dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)
+    exp_name = dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)+'_lr_'+str(lr)
     data.to_csv(f'{exp_name}.csv')
     wer_list = []
     wer_list.append(jiwer.wer(list(data["reference_clean"]), list(data["step1_clean"])))
     wer_list.append(jiwer.wer(list(data["reference_clean"]), list(data["step3_clean"])))
     wer_list.append(jiwer.wer(list(data["reference_clean"]), list(data["step5_clean"])))
     wer_list.append(jiwer.wer(list(data["reference_clean"]), list(data["step10_clean"])))
-    for i in wer_list:
-        print(f'WER: {i}')
+    with open(f"wer_{exp_name}.txt", 'w') as f:
+        for i in wer_list:
+            f.write(f'WER: {i}'+'\n')
+        
     

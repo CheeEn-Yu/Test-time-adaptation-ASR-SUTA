@@ -114,7 +114,7 @@ def whisper_collect_params(model):
     for nm, m in model.named_modules():
         trainable = ['weight', 'bias']
         # train_LN
-        if isinstance(m, nn.LayerNorm) and str(nm).split('.')[0] == 'encoder':
+        if isinstance(m, nn.LayerNorm):
             for np, p in m.named_parameters():
                 if np in trainable:  
                     p.requires_grad = True
@@ -247,8 +247,13 @@ def forward_and_adapt(x, model, optimizer, em_coef=0.9, reweight=False, temp=1.,
 
     # inference again
     if repeat_inference:
-        with torch.no_grad():
-            outputs = model(x).logits
+        if not is_whisper:
+            with torch.no_grad():
+                outputs = model(x).logits
+        else:
+            with torch.no_grad():
+                outputs = model.decode(x, options)
+
     return outputs
 
 import argparse

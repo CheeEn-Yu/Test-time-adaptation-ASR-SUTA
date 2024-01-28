@@ -1,6 +1,6 @@
 python main.py  --steps 10 \
                 --dataset_name librispeech \
-                --dataset_dir ./LibriSpeech \
+                --dataset_dir  /home/allen172/Test-time-adaptation-ASR-SUTA/LibriSpeech \
                 --temp 2.5 \
                 --episodic \
                 --non_blank \
@@ -9,5 +9,5 @@ python main.py  --steps 10 \
                 --log_dir exps \
                 --lr 2e-5 \
                 --train_feature \
-                --extra_noise 0.005 \
+                --extra_noise 0. \
                 --is_whisper True
