@@ -41,6 +41,7 @@ if __name__ == '__main__':
     parser.add_argument('--extra_noise', type=float, default=0.)
     parser.add_argument('--scheduler', default=None)
     parser.add_argument('--is_whisper', type=bool, default=False)
+    parser.add_argument('--topk', type=int, default=0)
 
     args = parser.parse_args()
     asr = args.asr
@@ -66,6 +67,7 @@ if __name__ == '__main__':
     is_whisper = args.is_whisper
     skip_short_thd = None
     train_LN = True
+    topk = args.topk
 
     # load datasets
     # dataset = LibriSpeech("test-clean")
@@ -93,7 +95,7 @@ if __name__ == '__main__':
         outputs = model.decode(mel, options)
         model, optimizer, scheduler = load_model_and_optimizer(model, optimizer, scheduler, model_state, optimizer_state, scheduler_state)
         for i in range(10):
-            adapt_output = forward_and_adapt(mel, model, optimizer, em_coef, reweight, temp, non_blank, scheduler, div_coef,is_whisper=is_whisper, options=options)
+            adapt_output = forward_and_adapt(mel, model, optimizer, em_coef, reweight, temp, non_blank, scheduler, div_coef,topk=topk, is_whisper=is_whisper, options=options)
             if i == 0:
                 transcriptions_1.append(adapt_output[0][0].text)
             if i == 2:
