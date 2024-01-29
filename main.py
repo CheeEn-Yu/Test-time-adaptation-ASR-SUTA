@@ -42,6 +42,7 @@ if __name__ == '__main__':
     parser.add_argument('--scheduler', default=None)
     parser.add_argument('--is_whisper', type=bool, default=False)
     parser.add_argument('--topk', type=int, default=0)
+    parser.add_argument('--encoderOnly', type=bool, default=True)
 
     args = parser.parse_args()
     asr = args.asr
@@ -68,6 +69,7 @@ if __name__ == '__main__':
     skip_short_thd = None
     train_LN = True
     topk = args.topk
+    encoderOnly = True
 
     # load datasets
     # dataset = LibriSpeech("test-clean")
@@ -75,7 +77,7 @@ if __name__ == '__main__':
     dataset = load_dataset(split, dataset_name, dataset_dir, batch_size, extra_noise)
     # load models
     model = whisper.load_model("tiny.en")
-    params, names = whisper_collect_params(model)
+    params, names = whisper_collect_params(model, encoderOnly)
     model = model.to(DEVICE)
     options = whisper.DecodingOptions(language="en", without_timestamps=True)
     optimizer, scheduler = setup_optimizer(params, opt, lr, scheduler=scheduler)
@@ -121,7 +123,7 @@ if __name__ == '__main__':
     data["step10_clean"] = [normalizer(text) for text in data["step10"]]
     data["reference_clean"] = [normalizer(text) for text in data["reference"]]
 
-    exp_name = dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)+'_lr_'+str(lr)+'_EMcoef_'+str(em_coef)
+    exp_name = dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)+'_lr_'+str(lr)+'_EMcoef_'+str(em_coef)+'_encoderOnly_'+str(encoderOnly)
     data.to_csv(f'{exp_name}.csv')
     wer_list = []
     wer_list.append(jiwer.wer(list(data["reference_clean"]), list(data["step1_clean"])))
