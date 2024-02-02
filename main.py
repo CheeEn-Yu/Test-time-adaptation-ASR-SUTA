@@ -76,7 +76,8 @@ if __name__ == '__main__':
     from data import load_dataset
     dataset = load_dataset(split, dataset_name, dataset_dir, batch_size, extra_noise)
     # load models
-    model = whisper.load_model("tiny.en")
+    model_name = 'small.en'
+    model = whisper.load_model(model_name)
     params, names = whisper_collect_params(model, encoderOnly)
     model = model.to(DEVICE)
     options = whisper.DecodingOptions(language="en", without_timestamps=True)
@@ -123,7 +124,7 @@ if __name__ == '__main__':
     data["step10_clean"] = [normalizer(text) for text in data["step10"]]
     data["reference_clean"] = [normalizer(text) for text in data["reference"]]
 
-    exp_name = dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)+'_lr_'+str(lr)+'_EMcoef_'+str(em_coef)+'_encoderOnly_'+str(encoderOnly)
+    exp_name = model_name+dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)+'_lr_'+str(lr)+'_EMcoef_'+str(em_coef)+'_encoderOnly_'+str(encoderOnly)+'_topk_'+str(topk)
     data.to_csv(f'{exp_name}.csv')
     wer_list = []
     wer_list.append(jiwer.wer(list(data["reference_clean"]), list(data["step1_clean"])))
