@@ -2,5 +2,7 @@ __pycache__
 *.csv
 *.wav
 *.txt
+*.flac
+ex_data/
 /LibriSpeech
 test.ipynb
