@@ -2,19 +2,25 @@ import os
 import argparse
 import numpy as np
 import pandas as pd
-
 import torch
 import torchaudio
 import torch.nn.functional as F
 from torch import nn
+
 import whisper
 from whisper.audio import (
     log_mel_spectrogram,
     pad_or_trim,
 )
 from tqdm import tqdm
-
 from suta import *
+
+seed = 42
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+torch.manual_seed(seed)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(seed)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -34,6 +40,8 @@ if __name__ == '__main__':
     parser.add_argument('--bias_only', action='store_true')
     parser.add_argument('--train_feature', action='store_true')
     parser.add_argument('--train_all', action='store_true')
+    parser.add_argument('--encoderOnly', type=bool, default=True)
+    parser.add_argument('--decoderOnly', type=bool, default=False)
     parser.add_argument('--batch_size', type=int, default=1)
     parser.add_argument('--temp', type=float, default=2.5)
     parser.add_argument('--non_blank', action='store_true')
@@ -42,7 +50,7 @@ if __name__ == '__main__':
     parser.add_argument('--scheduler', default=None)
     parser.add_argument('--is_whisper', type=bool, default=False)
     parser.add_argument('--topk', type=int, default=0)
-    parser.add_argument('--encoderOnly', type=bool, default=True)
+    parser.add_argument('--beam_size', type=int, default=0)
 
     args = parser.parse_args()
     asr = args.asr
@@ -68,19 +76,20 @@ if __name__ == '__main__':
     is_whisper = args.is_whisper
     skip_short_thd = None
     train_LN = True
-    topk = args.topk
-    encoderOnly = True
 
     # load datasets
-    # dataset = LibriSpeech("test-clean")
     from data import load_dataset
     dataset = load_dataset(split, dataset_name, dataset_dir, batch_size, extra_noise)
     # load models
-    model_name = 'small.en'
+    model_name = 'base'
     model = whisper.load_model(model_name)
-    params, names = whisper_collect_params(model, encoderOnly)
+    params, names = whisper_collect_params(model, args.encoderOnly, args.decoderOnly)
     model = model.to(DEVICE)
-    options = whisper.DecodingOptions(language="en", without_timestamps=True)
+    if args.beam_size != 0:
+        options = whisper.DecodingOptions(language="en", beam_size=args.beam_size, without_timestamps=True)
+    else:
+        options = whisper.DecodingOptions(language="en", without_timestamps=True)
+
     optimizer, scheduler = setup_optimizer(params, opt, lr, scheduler=scheduler)
 
     transcriptions_1 = []
@@ -93,12 +102,11 @@ if __name__ == '__main__':
         lens, wavs, texts, files = batch
         wavs = pad_or_trim(wavs[0])
         mel = log_mel_spectrogram(wavs)
-        mel = mel.unsqueeze(-1)
-        mel = mel.permute(2,0,1).to(DEVICE)
+        mel = mel.unsqueeze(0).to(DEVICE)
         outputs = model.decode(mel, options)
         model, optimizer, scheduler = load_model_and_optimizer(model, optimizer, scheduler, model_state, optimizer_state, scheduler_state)
-        for i in range(10):
-            adapt_output = forward_and_adapt(mel, model, optimizer, em_coef, reweight, temp, non_blank, scheduler, div_coef,topk=topk, is_whisper=is_whisper, options=options)
+        for i in range(steps):
+            adapt_output = forward_and_adapt(mel, model, optimizer, em_coef, reweight, temp, non_blank, scheduler, div_coef,topk=args.topk, is_whisper=is_whisper, options=options)
             if i == 0:
                 transcriptions_1.append(adapt_output[0][0].text)
             if i == 2:

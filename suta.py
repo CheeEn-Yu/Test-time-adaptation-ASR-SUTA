@@ -103,7 +103,7 @@ def collect_params(model, bias_only=False, train_feature=False, train_all=False,
             
 
     return params, names
-def whisper_collect_params(model, encoderOnly):
+def whisper_collect_params(model, encoderOnly, decoderOnly):
     # collect trainable params
     params = []
     names = []
@@ -122,6 +122,14 @@ def whisper_collect_params(model, encoderOnly):
                             p.requires_grad = True
                             params.append(p)
                             names.append(f"{nm}.{np}")
+            elif decoderOnly:
+                if str(nm).split('.')[0] == 'decoder':
+                    for np, p in m.named_parameters():
+                        if np in trainable:  
+                            p.requires_grad = True
+                            params.append(p)
+                            names.append(f"{nm}.{np}")
+
             else:
                 for np, p in m.named_parameters():
                     if np in trainable:  
@@ -130,12 +138,12 @@ def whisper_collect_params(model, encoderOnly):
                         names.append(f"{nm}.{np}")
 
         # train_feature
-        # if len(str(nm).split('.')) > 1:
-        #     if str(nm).split('.')[0] == 'encoder' and (str(nm).split('.')[1] == 'conv1' or str(nm).split('.')[1] == 'conv2'):
-        #         for np, p in m.named_parameters():
-        #             p.requires_grad = True
-        #             params.append(p)
-        #             names.append(f"{nm}.{np}")
+        if len(str(nm).split('.')) > 1:
+            if str(nm).split('.')[0] == 'encoder' and (str(nm).split('.')[1] == 'conv1' or str(nm).split('.')[1] == 'conv2'):
+                for np, p in m.named_parameters():
+                    p.requires_grad = True
+                    params.append(p)
+                    names.append(f"{nm}.{np}")
 
     return params, names
 
@@ -207,7 +215,7 @@ def configure_model(model):
     return model
 
 def forward_and_adapt(x, model, optimizer, em_coef=0.9, reweight=False, temp=1., not_blank=True, scheduler=None, 
-                        div_coef=0, topk=0, repeat_inference=True, is_whisper=True, options=None, skip_short_thd=None ):
+                        div_coef=0, topk=0, beam_size=0, repeat_inference=True, is_whisper=True, options=None, skip_short_thd=None ):
     """Forward and adapt model on batch of data.
 
     Measure entropy of the model prediction, take gradients, and update params.
@@ -217,13 +225,11 @@ def forward_and_adapt(x, model, optimizer, em_coef=0.9, reweight=False, temp=1.,
     # forward
     if is_whisper:
         outputs = model.decode(x, options)
-        outputs = torch.stack(outputs[1], dim=0)
-        outputs=outputs.permute(1,0,2) # torch.Size([1, 5, 51864])
+        logits = torch.stack(outputs[1], dim=0)
         if topk != 0:
-            outputs, idx = torch.topk(outputs,k=topk)
+            logits, idx = torch.topk(logits,k=topk)
     else:
         outputs = model(x).logits
-        
         predicted_ids = torch.argmax(outputs, dim=-1)
         non_blank = torch.where(predicted_ids != 0, 1, 0).bool()
     # adapt
@@ -237,11 +243,16 @@ def forward_and_adapt(x, model, optimizer, em_coef=0.9, reweight=False, temp=1.,
             else: 
                 e_loss = softmax_entropy(outputs / temp).mean(0).mean() 
         else:
-            e_loss = softmax_entropy(outputs / temp).mean(0).mean()
+            if beam_size == 0:
+                logits = torch.permute(1,0,2)
+                e_loss = softmax_entropy(logits / temp).mean(0).mean()
+            else:
+                logits = logits[:,outputs[2][0], :].unsqueeze(0)
+                e_loss = softmax_entropy(logits / temp).mean(0).mean()
         loss += e_loss * em_coef
 
     if 1 - em_coef > 0: 
-        c_loss = mcc_loss(outputs / temp, reweight)
+        c_loss = mcc_loss(logits / temp, reweight)
         loss += c_loss * (1 - em_coef)
 
     if div_coef > 0: 

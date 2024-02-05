@@ -379,7 +379,7 @@ class BeamSearchDecoder(TokenDecoder):
             len(sequences) >= self.max_candidates
             for sequences in self.finished_sequences
         )
-        return tokens, completed
+        return tokens, completed, source_indices
 
     def finalize(self, preceding_tokens: Tensor, sum_logprobs: Tensor):
         # collect all finished sequences, including patience, and add unfinished ones if not enough
@@ -682,6 +682,7 @@ class DecodingTask:
         sum_logprobs: Tensor = torch.zeros(n_batch, device=audio_features.device)
         no_speech_probs = [np.nan] * n_batch
         logits_arr = []
+        logit_rank = []
 
         try:
             for i in range(self.sample_len):
@@ -703,14 +704,14 @@ class DecodingTask:
                     logit_filter.apply(logits, tokens)
 
                 # expand the tokens tensor with the selected next tokens
-                tokens, completed = self.decoder.update(tokens, logits, sum_logprobs)
+                tokens, completed, logit_rank = self.decoder.update(tokens, logits, sum_logprobs)
 
                 if completed or tokens.shape[-1] > self.n_ctx:
                     break
         finally:
             self.inference.cleanup_caching()
 
-        return tokens, sum_logprobs, no_speech_probs, logits_arr
+        return tokens, sum_logprobs, no_speech_probs, logits_arr, logit_rank
 
     # @torch.no_grad()
     def run(self, mel: Tensor) -> List[DecodingResult]:
@@ -737,7 +738,7 @@ class DecodingTask:
         tokens = tokens.repeat_interleave(self.n_group, dim=0).to(audio_features.device)
 
         # call the main sampling loop
-        tokens, sum_logprobs, no_speech_probs, logits_arr = self._main_loop(audio_features, tokens)
+        tokens, sum_logprobs, no_speech_probs, logits_arr, logit_rank = self._main_loop(audio_features, tokens)
 
         # reshape the tensors to have (n_audio, n_group) as the first two dimensions
         audio_features = audio_features[:: self.n_group]
@@ -789,7 +790,7 @@ class DecodingTask:
             for text, language, tokens, features, avg_logprob, no_speech_prob in zip(
                 *fields
             )
-        ], logits_arr
+        ], logits_arr, logit_rank
 
 
 # @torch.no_grad()
