@@ -244,7 +244,7 @@ def forward_and_adapt(x, model, optimizer, em_coef=0.9, reweight=False, temp=1.,
                 e_loss = softmax_entropy(outputs / temp).mean(0).mean() 
         else:
             if beam_size == 0:
-                logits = torch.permute(1,0,2)
+                logits = torch.permute(logits, (1,0,2))
                 e_loss = softmax_entropy(logits / temp).mean(0).mean()
             else:
                 logits = logits[:,outputs[2][0], :].unsqueeze(0)
