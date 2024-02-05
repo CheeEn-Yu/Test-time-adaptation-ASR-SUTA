@@ -105,7 +105,7 @@ if __name__ == '__main__':
         outputs = model.decode(mel, options)
         model, optimizer, scheduler = load_model_and_optimizer(model, optimizer, scheduler, model_state, optimizer_state, scheduler_state)
         for i in range(steps):
-            adapt_output = forward_and_adapt(mel, model, optimizer, em_coef, reweight, temp, non_blank, scheduler, div_coef,topk=args.topk, is_whisper=is_whisper, options=options)
+            adapt_output = forward_and_adapt(mel, model, optimizer, em_coef, reweight, temp, non_blank, scheduler, div_coef,topk=args.topk, beam_size=args.beam_size, is_whisper=is_whisper, options=options)
             if i == 0:
                 transcriptions_1.append(adapt_output[0][0].text)
             if i == 2:
@@ -131,7 +131,7 @@ if __name__ == '__main__':
     data["step10_clean"] = [normalizer(text) for text in data["step10"]]
     data["reference_clean"] = [normalizer(text) for text in data["reference"]]
 
-    exp_name = args.asr+dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)+'_lr_'+str(lr)+'_EMcoef_'+str(em_coef)+'_encoderOnly_'+str(args.encoderOnly)+'_topk_'+str(args.topk)
+    exp_name = args.asr+dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)+'_lr_'+str(lr)+'_EMcoef_'+str(em_coef)+'_encoderOnly_'+str(args.encoderOnly)+'_topk_'+str(args.topk)+'_beam_'+args.beam_size
     data.to_csv(f'{exp_name}.csv')
     wer_list = []
     wer_list.append(jiwer.wer(list(data["reference_clean"]), list(data["step1_clean"])))

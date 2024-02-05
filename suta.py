@@ -31,6 +31,8 @@ def softmax_entropy(x, dim=2):
 def mcc_loss(x, reweight=False, dim=2, class_num=32):
     p = x.softmax(dim) # (1, L, D)
     p = p.squeeze(0) # (L, D)
+    print(f'p.T:{p.transpose(1,0).shape}')
+    print(f'p:{p.shape}')
     if reweight: # (1, L, D) * (L, 1) 
         target_entropy_weight = softmax_entropy(x, dim=2).detach().squeeze(0) # instance-wise entropy (1, L, D)
         target_entropy_weight = 1 + torch.exp(-target_entropy_weight) # (1, L)
@@ -252,7 +254,7 @@ def forward_and_adapt(x, model, optimizer, em_coef=0.9, reweight=False, temp=1.,
         loss += e_loss * em_coef
 
     if 1 - em_coef > 0: 
-        c_loss = mcc_loss(logits / temp, reweight)
+        c_loss = mcc_loss(logits / temp, class_num=topk)
         loss += c_loss * (1 - em_coef)
 
     if div_coef > 0: 
