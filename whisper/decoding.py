@@ -290,7 +290,7 @@ class GreedyDecoder(TokenDecoder):
         tokens = torch.cat([tokens, next_tokens[:, None]], dim=-1)
 
         completed = (tokens[:, -1] == self.eot).all()
-        return tokens, completed
+        return tokens, completed, None
 
     def finalize(self, tokens: Tensor, sum_logprobs: Tensor):
         # make sure each sequence has at least one EOT token at the end
