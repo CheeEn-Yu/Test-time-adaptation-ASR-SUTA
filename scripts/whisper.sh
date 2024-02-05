@@ -10,4 +10,7 @@ python main.py  --steps 10 \
                 --lr 2e-5 \
                 --train_feature \
                 --extra_noise 0. \
-                --is_whisper True
+                --is_whisper True \
+                --encoderOnly False \
+                --decoderOnly True \
+                --beam_size 4
