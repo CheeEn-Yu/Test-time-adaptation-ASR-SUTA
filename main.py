@@ -134,7 +134,7 @@ if __name__ == '__main__':
     data["step10_clean"] = [normalizer(text) for text in data["step10"]]
     data["reference_clean"] = [normalizer(text) for text in data["reference"]]
 
-    exp_name = args.asr+dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)+'_lr_'+str(lr)+'_EMcoef_'+str(em_coef)+'_encoderOnly_'+str(args.encoderOnly)+'_topk_'+str(args.topk)+'_beam_'+args.beam_size
+    exp_name = args.asr+dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)+'_lr_'+str(lr)+'_EMcoef_'+str(em_coef)+'_encoderOnly_'+str(args.encoderOnly)+'_topk_'+str(args.topk)+'_beam_'+str(args.beam_size)
     data.to_csv(f'{exp_name}.csv')
     wer_list = []
     wer_list.append(jiwer.wer(list(data["reference_clean"]), list(data["before_adapt_clean"])))
