@@ -94,6 +94,7 @@ if __name__ == '__main__':
     transcriptions_3 = []
     transcriptions_5 = []
     transcriptions_10 = []
+    before_adapt_list = []
     ori_transcriptions = []
     model_state, optimizer_state, scheduler_state = copy_model_and_optimizer(model, optimizer, scheduler)
     for batch in tqdm(dataset):
@@ -101,7 +102,8 @@ if __name__ == '__main__':
         wavs = pad_or_trim(wavs[0])
         mel = log_mel_spectrogram(wavs)
         mel = mel.unsqueeze(0).to(DEVICE)
-        outputs = model.decode(mel, options)
+        with torch.no_grad():
+            before_adapt_list.append(model.decode(mel, options)[0][0].text)
         model, optimizer, scheduler = load_model_and_optimizer(model, optimizer, scheduler, model_state, optimizer_state, scheduler_state)
         model = model.to(DEVICE)
         for i in range(steps):
@@ -116,15 +118,16 @@ if __name__ == '__main__':
 
         transcriptions_10.append(adapt_output[0][0].text)
         ori_transcriptions.append(texts[0])
-        del outputs, adapt_output
-        torch.cuda.empty_cache()
+    del adapt_output
+    torch.cuda.empty_cache()
     
-    data = pd.DataFrame(dict(step1=transcriptions_1,step3=transcriptions_3,step5=transcriptions_5,step10=transcriptions_10, reference=ori_transcriptions))
+    data = pd.DataFrame(dict(before_adapt=before_adapt_list,step1=transcriptions_1,step3=transcriptions_3,step5=transcriptions_5,step10=transcriptions_10, reference=ori_transcriptions))
     
     import jiwer
     from whisper.normalizers import EnglishTextNormalizer
     normalizer = EnglishTextNormalizer()
 
+    data["before_adapt_clean"] = [normalizer(text) for text in data["before_adapt"]]
     data["step1_clean"] = [normalizer(text) for text in data["step1"]]
     data["step3_clean"] = [normalizer(text) for text in data["step3"]]
     data["step5_clean"] = [normalizer(text) for text in data["step5"]]
@@ -134,6 +137,7 @@ if __name__ == '__main__':
     exp_name = args.asr+dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)+'_lr_'+str(lr)+'_EMcoef_'+str(em_coef)+'_encoderOnly_'+str(args.encoderOnly)+'_topk_'+str(args.topk)+'_beam_'+args.beam_size
     data.to_csv(f'{exp_name}.csv')
     wer_list = []
+    wer_list.append(jiwer.wer(list(data["reference_clean"]), list(data["before_adapt_clean"])))
     wer_list.append(jiwer.wer(list(data["reference_clean"]), list(data["step1_clean"])))
     wer_list.append(jiwer.wer(list(data["reference_clean"]), list(data["step3_clean"])))
     wer_list.append(jiwer.wer(list(data["reference_clean"]), list(data["step5_clean"])))
