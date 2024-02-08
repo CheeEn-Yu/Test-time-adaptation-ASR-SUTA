@@ -83,7 +83,6 @@ if __name__ == '__main__':
     # load models
     model = whisper.load_model(args.asr)
     params, names = whisper_collect_params(model, args.encoderOnly, args.decoderOnly)
-    model = model.to(DEVICE)
     if args.beam_size != 0:
         options = whisper.DecodingOptions(language="en", beam_size=args.beam_size, without_timestamps=True)
     else:
@@ -104,6 +103,7 @@ if __name__ == '__main__':
         mel = mel.unsqueeze(0).to(DEVICE)
         outputs = model.decode(mel, options)
         model, optimizer, scheduler = load_model_and_optimizer(model, optimizer, scheduler, model_state, optimizer_state, scheduler_state)
+        model = model.to(DEVICE)
         for i in range(steps):
             adapt_output = forward_and_adapt(mel, model, optimizer, em_coef, reweight, temp, non_blank, scheduler, div_coef,topk=args.topk, beam_size=args.beam_size, is_whisper=is_whisper, options=options)
             if i == 0:

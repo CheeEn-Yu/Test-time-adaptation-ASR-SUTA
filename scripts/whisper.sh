@@ -5,14 +5,14 @@ python main.py  --steps 10 \
                 --temp 2.5 \
                 --episodic \
                 --non_blank \
-                --em_coef 1.0 \
+                --em_coef 0.3 \
                 --reweight \
                 --log_dir exps \
                 --lr 2e-5 \
-                --topk 3 \
+                --topk 30 \
                 --train_feature \
-                --extra_noise 0. \
+                --extra_noise 0.01 \
                 --is_whisper True \
                 --encoderOnly False \
                 --decoderOnly True \
-                --beam_size 2
+                --beam_size 0
