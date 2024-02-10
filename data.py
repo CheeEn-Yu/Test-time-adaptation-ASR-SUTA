@@ -61,6 +61,8 @@ def create_dataset(split, name, path, batch_size=1):
         from corpus.valentini import ValDataset as Dataset
     elif name.lower() =="l2arctic":
         from corpus.l2arctic import L2ArcticDataset as Dataset
+    elif name.lower() == "aishell3":
+        from corpus.aishell3 import AIShellDataset as Dataset
         
     else:
         raise NotImplementedError

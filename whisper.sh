@@ -1,7 +1,7 @@
 python main.py  --steps 10 \
-                --asr tiny.en \
-                --dataset_name librispeech \
-                --dataset_dir  ./LibriSpeech \
+                --asr tiny \
+                --dataset_name aishell3 \
+                --dataset_dir  ./aishell_test \
                 --temp 2.5 \
                 --episodic \
                 --non_blank \
@@ -11,8 +11,7 @@ python main.py  --steps 10 \
                 --lr 2e-5 \
                 --topk 30 \
                 --train_feature \
-                --extra_noise 0.01 \
-                --is_whisper True \
-                --encoderOnly False \
-                --decoderOnly True \
+                --extra_noise 0. \
+                --is_whisper \
+                --decoderOnly \
                 --beam_size 0
