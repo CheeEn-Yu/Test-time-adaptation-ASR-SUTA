@@ -86,7 +86,7 @@ if __name__ == '__main__':
     params, names = whisper_collect_params(model, args.encoderOnly, args.decoderOnly)
     if dataset_name == 'aishell3':
         if args.beam_size == 0:
-            whisper.DecodingOptions(language="zh", prompt="简体", without_timestamps=True)
+            options = whisper.DecodingOptions(language="zh", prompt="简体", without_timestamps=True)
     elif args.beam_size != 0:
         options = whisper.DecodingOptions(language="en", beam_size=args.beam_size, without_timestamps=True)
     else:
