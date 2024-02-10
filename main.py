@@ -124,7 +124,18 @@ if __name__ == '__main__':
         torch.cuda.empty_cache()
     except:
         print("====OOM===== save the file")
-        data = pd.DataFrame(dict(before_adapt=before_adapt_list,step1=transcriptions_1,step3=transcriptions_3,step5=transcriptions_5,step10=transcriptions_10, reference=ori_transcriptions))
+        try:
+            data = pd.DataFrame(dict(before_adapt=before_adapt_list,step1=transcriptions_1,step3=transcriptions_3,step5=transcriptions_5,step10=transcriptions_10, reference=ori_transcriptions))
+        except:
+            max_length = max(len(before_adapt_list), len(transcriptions_1), len(transcriptions_3), len(transcriptions_5), len(transcriptions_10), len(ori_transcriptions))
+            before_adapt_list += ['oom_pad'] * (max_length - len(before_adapt_list))
+            transcriptions_1 += ['oom_pad'] * (max_length - len(transcriptions_1))
+            transcriptions_3 += ['oom_pad'] * (max_length - len(transcriptions_3))
+            transcriptions_5 += ['oom_pad'] * (max_length - len(transcriptions_5))
+            transcriptions_10 += ['oom_pad'] * (max_length - len(transcriptions_10))
+            ori_transcriptions += ['oom_pad'] * (max_length - len(ori_transcriptions))
+            data = pd.DataFrame(dict(before_adapt=before_adapt_list,step1=transcriptions_1,step3=transcriptions_3,step5=transcriptions_5,step10=transcriptions_10, reference=ori_transcriptions))
+
         
         normalizer = EnglishTextNormalizer()
 
