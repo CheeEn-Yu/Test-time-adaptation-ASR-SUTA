@@ -140,7 +140,30 @@ if __name__ == '__main__':
             ori_transcriptions += ['oom_pad'] * (max_length - len(ori_transcriptions))
             data = pd.DataFrame(dict(before_adapt=before_adapt_list,step1=transcriptions_1,step3=transcriptions_3,step5=transcriptions_5,step10=transcriptions_10, reference=ori_transcriptions))
 
-        
+
+        if dataset_name == 'aishell3':
+            import cn2an
+            from opencc import OpenCC
+            cc = OpenCC('t2s')
+            exp_name = args.asr+'_'+dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)+'_lr_'+str(lr)+'_EMcoef_'+str(em_coef)+'_encoderOnly_'+str(args.encoderOnly)+'_decoderOnly_'+str(args.decoderOnly)+'_topk_'+str(args.topk)+'_beam_'+str(args.beam_size)
+            data.to_csv(f'{exp_name}.csv')
+            wer_list = []
+            data["before_adapt_clean"] = [cn2an.transform(cc.convert(text) ,"an2cn") for text in data["before_adapt"]]
+            data["step1_clean"] = [cn2an.transform(cc.convert(text) ,"an2cn") for text in data["step1"]]
+            data["step3_clean"] = [cn2an.transform(cc.convert(text) ,"an2cn") for text in data["step3"]]
+            data["step5_clean"] = [cn2an.transform(cc.convert(text) ,"an2cn") for text in data["step5"]]
+            data["step10_clean"] = [cn2an.transform(cc.convert(text) ,"an2cn") for text in data["step10"]]
+            wer_list.append(jiwer.cer(list(data["reference"]), list(data["before_adapt_clean"])))
+            wer_list.append(jiwer.cer(list(data["reference"]), list(data["step1_clean"])))
+            wer_list.append(jiwer.cer(list(data["reference"]), list(data["step3_clean"])))
+            wer_list.append(jiwer.cer(list(data["reference"]), list(data["step5_clean"])))
+            wer_list.append(jiwer.cer(list(data["reference"]), list(data["step10_clean"])))
+            with open(f"wer_{exp_name}.txt", 'w') as f:
+                for i in wer_list:
+                    f.write(f'CER: {i}'+'\n')
+                f.write('OOM occur\n')
+            exit()
+
         normalizer = EnglishTextNormalizer()
 
         data["before_adapt_clean"] = [normalizer(text) for text in data["before_adapt"]]
@@ -150,7 +173,7 @@ if __name__ == '__main__':
         data["step10_clean"] = [normalizer(text) for text in data["step10"]]
         data["reference_clean"] = [normalizer(text) for text in data["reference"]]
 
-        exp_name = args.asr+'_'+dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)+'_lr_'+str(lr)+'_EMcoef_'+str(em_coef)+'_encoderOnly_'+str(args.encoderOnly)+'_topk_'+str(args.topk)+'_beam_'+str(args.beam_size)
+        exp_name = args.asr+'_'+dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)+'_lr_'+str(lr)+'_EMcoef_'+str(em_coef)+'_encoderOnly_'+str(args.encoderOnly)+'_decoderOnly_'+str(args.decoderOnly)+'_topk_'+str(args.topk)+'_beam_'+str(args.beam_size)
         data.to_csv(f'{exp_name}.csv')
         wer_list = []
         wer_list.append(jiwer.wer(list(data["reference_clean"]), list(data["before_adapt_clean"])))
@@ -161,7 +184,6 @@ if __name__ == '__main__':
         with open(f"wer_{exp_name}.txt", 'w') as f:
             for i in wer_list:
                 f.write(f'WER: {i}'+'\n')
-            f.write('=====OOM=======')
         exit()
     
     data = pd.DataFrame(dict(before_adapt=before_adapt_list,step1=transcriptions_1,step3=transcriptions_3,step5=transcriptions_5,step10=transcriptions_10, reference=ori_transcriptions))
