@@ -4,3 +4,6 @@ pandas
 jiwer
 torchaudio
 soundfile
+cn2an
+openai-whisper
+opencc-python-reimplemented

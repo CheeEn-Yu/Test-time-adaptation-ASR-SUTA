@@ -27,7 +27,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="TTA ASR")
     parser.add_argument('--asr', type=str, default="facebook/wav2vec2-base-960h")
-    parser.add_argument('--steps', type=int, default=40)
+    parser.add_argument('--steps', type=int, default=10)
     parser.add_argument('--episodic', action='store_true')
     parser.add_argument('--div_coef', type=float, default=0.)
     parser.add_argument('--opt', type=str, default='AdamW')
@@ -84,10 +84,14 @@ if __name__ == '__main__':
     # load models
     model = whisper.load_model(args.asr)
     params, names = whisper_collect_params(model, args.encoderOnly, args.decoderOnly)
-    if args.beam_size != 0:
+    if dataset_name == 'aishell3':
+        if args.beam_size == 0:
+            whisper.DecodingOptions(language="zh", prompt="简体", without_timestamps=True)
+    elif args.beam_size != 0:
         options = whisper.DecodingOptions(language="en", beam_size=args.beam_size, without_timestamps=True)
     else:
         options = whisper.DecodingOptions(language="en", without_timestamps=True)
+
 
     optimizer, scheduler = setup_optimizer(params, opt, lr, scheduler=scheduler)
 
@@ -123,7 +127,7 @@ if __name__ == '__main__':
         del adapt_output
         torch.cuda.empty_cache()
     except:
-        print("====OOM===== save the file")
+        print("[logger] - OOM may occur, save the file")
         try:
             data = pd.DataFrame(dict(before_adapt=before_adapt_list,step1=transcriptions_1,step3=transcriptions_3,step5=transcriptions_5,step10=transcriptions_10, reference=ori_transcriptions))
         except:
@@ -158,8 +162,31 @@ if __name__ == '__main__':
             for i in wer_list:
                 f.write(f'WER: {i}'+'\n')
             f.write('=====OOM=======')
+        exit()
     
     data = pd.DataFrame(dict(before_adapt=before_adapt_list,step1=transcriptions_1,step3=transcriptions_3,step5=transcriptions_5,step10=transcriptions_10, reference=ori_transcriptions))
+    if dataset_name == 'aishell3':
+        import cn2an
+        from opencc import OpenCC
+        cc = OpenCC('t2s')
+        exp_name = args.asr+'_'+dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)+'_lr_'+str(lr)+'_EMcoef_'+str(em_coef)+'_encoderOnly_'+str(args.encoderOnly)+'_decoderOnly_'+str(args.decoderOnly)+'_topk_'+str(args.topk)+'_beam_'+str(args.beam_size)
+        data.to_csv(f'{exp_name}.csv')
+        wer_list = []
+        data["before_adapt_clean"] = [cn2an.transform(cc.convert(text) ,"an2cn") for text in data["before_adapt"]]
+        data["step1_clean"] = [cn2an.transform(cc.convert(text) ,"an2cn") for text in data["step1"]]
+        data["step3_clean"] = [cn2an.transform(cc.convert(text) ,"an2cn") for text in data["step3"]]
+        data["step5_clean"] = [cn2an.transform(cc.convert(text) ,"an2cn") for text in data["step5"]]
+        data["step10_clean"] = [cn2an.transform(cc.convert(text) ,"an2cn") for text in data["step10"]]
+        wer_list.append(jiwer.cer(list(data["reference"]), list(data["before_adapt_clean"])))
+        wer_list.append(jiwer.cer(list(data["reference"]), list(data["step1_clean"])))
+        wer_list.append(jiwer.cer(list(data["reference"]), list(data["step3_clean"])))
+        wer_list.append(jiwer.cer(list(data["reference"]), list(data["step5_clean"])))
+        wer_list.append(jiwer.cer(list(data["reference"]), list(data["step10_clean"])))
+        with open(f"wer_{exp_name}.txt", 'w') as f:
+            for i in wer_list:
+                f.write(f'CER: {i}'+'\n')
+        exit()
+
     normalizer = EnglishTextNormalizer()
 
     data["before_adapt_clean"] = [normalizer(text) for text in data["before_adapt"]]
@@ -169,7 +196,7 @@ if __name__ == '__main__':
     data["step10_clean"] = [normalizer(text) for text in data["step10"]]
     data["reference_clean"] = [normalizer(text) for text in data["reference"]]
 
-    exp_name = args.asr+'_'+dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)+'_lr_'+str(lr)+'_EMcoef_'+str(em_coef)+'_encoderOnly_'+str(args.encoderOnly)+'_decoderOnly_'+str('decoderOnly')+'_topk_'+str(args.topk)+'_beam_'+str(args.beam_size)
+    exp_name = args.asr+'_'+dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)+'_lr_'+str(lr)+'_EMcoef_'+str(em_coef)+'_encoderOnly_'+str(args.encoderOnly)+'_decoderOnly_'+str(args.decoderOnly)+'_topk_'+str(args.topk)+'_beam_'+str(args.beam_size)
     data.to_csv(f'{exp_name}.csv')
     wer_list = []
     wer_list.append(jiwer.wer(list(data["reference_clean"]), list(data["before_adapt_clean"])))
