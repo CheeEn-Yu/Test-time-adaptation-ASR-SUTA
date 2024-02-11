@@ -1,7 +1,7 @@
 python main.py  --steps 10 \
-                --asr tiny \
+                --asr base \
                 --dataset_name aishell3 \
-                --dataset_dir  ./aishell_test \
+                --dataset_dir ../test \
                 --temp 2.5 \
                 --episodic \
                 --non_blank \
@@ -9,9 +9,8 @@ python main.py  --steps 10 \
                 --reweight \
                 --log_dir exps \
                 --lr 2e-5 \
-                --topk 30 \
                 --train_feature \
-                --extra_noise 0. \
                 --is_whisper \
-                --decoderOnly \
+                --topk 30 \
+                --decoderLN \
                 --beam_size 0
