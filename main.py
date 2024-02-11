@@ -41,8 +41,8 @@ if __name__ == '__main__':
     parser.add_argument('--train_feature', action='store_true')
     parser.add_argument('--train_all', action='store_true')
     parser.add_argument('--is_whisper', action=argparse.BooleanOptionalAction)
-    parser.add_argument('--encoderOnly', action=argparse.BooleanOptionalAction)
-    parser.add_argument('--decoderOnly', action=argparse.BooleanOptionalAction)
+    parser.add_argument('--encoderLN', action=argparse.BooleanOptionalAction)
+    parser.add_argument('--decoderLN', action=argparse.BooleanOptionalAction)
     parser.add_argument('--batch_size', type=int, default=1)
     parser.add_argument('--temp', type=float, default=2.5)
     parser.add_argument('--non_blank', action='store_true')
@@ -83,7 +83,7 @@ if __name__ == '__main__':
     dataset = load_dataset(split, dataset_name, dataset_dir, batch_size, extra_noise)
     # load models
     model = whisper.load_model(args.asr)
-    params, names = whisper_collect_params(model, args.encoderOnly, args.decoderOnly)
+    params, names = whisper_collect_params(model, args.encoderLN, args.decoderLN, train_feature=train_feature)
     if dataset_name == 'aishell3':
         if args.beam_size == 0:
             options = whisper.DecodingOptions(language="zh", prompt="简体", without_timestamps=True)
@@ -103,7 +103,11 @@ if __name__ == '__main__':
     ori_transcriptions = []
     model_state, optimizer_state, scheduler_state = copy_model_and_optimizer(model, optimizer, scheduler)
     try:
+        count = 0
         for batch in tqdm(dataset):
+            count+=1
+            if count > 1000:
+                break
             lens, wavs, texts, files = batch
             wavs = pad_or_trim(wavs[0])
             mel = log_mel_spectrogram(wavs)
@@ -145,7 +149,7 @@ if __name__ == '__main__':
             import cn2an
             from opencc import OpenCC
             cc = OpenCC('t2s')
-            exp_name = args.asr+'_'+dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)+'_lr_'+str(lr)+'_EMcoef_'+str(em_coef)+'_encoderOnly_'+str(args.encoderOnly)+'_decoderOnly_'+str(args.decoderOnly)+'_topk_'+str(args.topk)+'_beam_'+str(args.beam_size)
+            exp_name = args.asr+'_'+dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)+'_lr_'+str(lr)+'_EMcoef_'+str(em_coef)+'_trainFeature_'+str(train_feature)+'_encoderLN_'+str(args.encoderLN)+'_decoderLN_'+str(args.decoderLN)+'_topk_'+str(args.topk)+'_beam_'+str(args.beam_size)
             data.to_csv(f'{exp_name}.csv')
             wer_list = []
             data["before_adapt_clean"] = [cn2an.transform(cc.convert(text) ,"an2cn") for text in data["before_adapt"]]
@@ -173,7 +177,7 @@ if __name__ == '__main__':
         data["step10_clean"] = [normalizer(text) for text in data["step10"]]
         data["reference_clean"] = [normalizer(text) for text in data["reference"]]
 
-        exp_name = args.asr+'_'+dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)+'_lr_'+str(lr)+'_EMcoef_'+str(em_coef)+'_encoderOnly_'+str(args.encoderOnly)+'_decoderOnly_'+str(args.decoderOnly)+'_topk_'+str(args.topk)+'_beam_'+str(args.beam_size)
+        exp_name = args.asr+'_'+dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)+'_lr_'+str(lr)+'_EMcoef_'+str(em_coef)+'_trainFeature_'+str(train_feature)+'_encoderLN_'+str(args.encoderLN)+'_decoderLN_'+str(args.decoderLN)+'_topk_'+str(args.topk)+'_beam_'+str(args.beam_size)
         data.to_csv(f'{exp_name}.csv')
         wer_list = []
         wer_list.append(jiwer.wer(list(data["reference_clean"]), list(data["before_adapt_clean"])))
@@ -191,7 +195,7 @@ if __name__ == '__main__':
         import cn2an
         from opencc import OpenCC
         cc = OpenCC('t2s')
-        exp_name = args.asr+'_'+dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)+'_lr_'+str(lr)+'_EMcoef_'+str(em_coef)+'_encoderOnly_'+str(args.encoderOnly)+'_decoderOnly_'+str(args.decoderOnly)+'_topk_'+str(args.topk)+'_beam_'+str(args.beam_size)
+        exp_name = args.asr+'_'+dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)+'_lr_'+str(lr)+'_EMcoef_'+str(em_coef)+'_trainFeature_'+str(train_feature)+'_encoderLN_'+str(args.encoderLN)+'_decoderLN_'+str(args.decoderLN)+'_topk_'+str(args.topk)+'_beam_'+str(args.beam_size)
         data.to_csv(f'{exp_name}.csv')
         wer_list = []
         data["before_adapt_clean"] = [cn2an.transform(cc.convert(text) ,"an2cn") for text in data["before_adapt"]]
@@ -218,7 +222,7 @@ if __name__ == '__main__':
     data["step10_clean"] = [normalizer(text) for text in data["step10"]]
     data["reference_clean"] = [normalizer(text) for text in data["reference"]]
 
-    exp_name = args.asr+'_'+dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)+'_lr_'+str(lr)+'_EMcoef_'+str(em_coef)+'_encoderOnly_'+str(args.encoderOnly)+'_decoderOnly_'+str(args.decoderOnly)+'_topk_'+str(args.topk)+'_beam_'+str(args.beam_size)
+    exp_name = args.asr+'_'+dataset_name+'_'+str(temp)+'_noise_'+str(extra_noise)+'_lr_'+str(lr)+'_EMcoef_'+str(em_coef)+'_trainFeature_'+str(train_feature)+'_encoderLN_'+str(args.encoderLN)+'_decoderLN_'+str(args.decoderLN)+'_topk_'+str(args.topk)+'_beam_'+str(args.beam_size)
     data.to_csv(f'{exp_name}.csv')
     wer_list = []
     wer_list.append(jiwer.wer(list(data["reference_clean"]), list(data["before_adapt_clean"])))
