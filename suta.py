@@ -103,7 +103,7 @@ def collect_params(model, bias_only=False, train_feature=False, train_all=False,
             
 
     return params, names
-def whisper_collect_params(model, encoderOnly, decoderOnly, train_feature=False):
+def whisper_collect_params(model, encoderLN, decoderLN, train_feature=False):
     # collect trainable params
     params = []
     names = []
@@ -115,14 +115,14 @@ def whisper_collect_params(model, encoderOnly, decoderOnly, train_feature=False)
         trainable = ['weight', 'bias']
         # train_LN
         if isinstance(m, nn.LayerNorm):
-            if encoderOnly:
+            if encoderLN:
                 if str(nm).split('.')[0] == 'encoder':
                     for np, p in m.named_parameters():
                         if np in trainable:  
                             p.requires_grad = True
                             params.append(p)
                             names.append(f"{nm}.{np}")
-            elif decoderOnly:
+            elif decoderLN:
                 if str(nm).split('.')[0] == 'decoder':
                     for np, p in m.named_parameters():
                         if np in trainable:  
