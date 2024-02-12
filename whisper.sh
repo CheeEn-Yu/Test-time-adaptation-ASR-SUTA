@@ -1,7 +1,9 @@
 python main.py  --steps 10 \
-                --asr base \
-                --dataset_name aishell3 \
-                --dataset_dir ../test \
+                --asr tiny \
+                --task translation \
+                --lang pt \
+                --dataset_name covost2 \
+                --dataset_dir ../covost2_pt \
                 --temp 2.5 \
                 --episodic \
                 --non_blank \
@@ -9,8 +11,9 @@ python main.py  --steps 10 \
                 --reweight \
                 --log_dir exps \
                 --lr 2e-5 \
-                --train_feature \
                 --is_whisper \
-                --topk 30 \
+                --train_feature \
+                --encoderLN \
                 --decoderLN \
+                --topk 30 \
                 --beam_size 0
