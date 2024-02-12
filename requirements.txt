@@ -7,3 +7,4 @@ soundfile
 cn2an
 openai-whisper
 opencc-python-reimplemented
+nltk
