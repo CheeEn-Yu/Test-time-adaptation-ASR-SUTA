@@ -97,13 +97,7 @@ if __name__ == '__main__':
             options = whisper.DecodingOptions(language="en", beam_size=args.beam_size, without_timestamps=True)
 
     data = pd.DataFrame()
-    transcriptions_1 = []
-    transcriptions_3 = []
-    transcriptions_5 = []
-    transcriptions_10 = []
-    ori_transcriptions = []
-    ori_langs = []
-    labels = []
+    ori_langs, ori_transcriptions, transcriptions_1, transcriptions_3, transcriptions_5, transcriptions_10, labels = [], [], [], [], [], [], []
     model_state, optimizer_state, scheduler_state = copy_model_and_optimizer(model, optimizer, scheduler)
     
     print(f'[logger] - start training...')
@@ -117,7 +111,7 @@ if __name__ == '__main__':
                 if count > 1000:
                     break
                 wavs = torch.Tensor(batch['audio']['array'])
-                if args.asr == 'large' or args.asr == 'large_v2' or args.asr == 'largev3':
+                if args.asr == 'large' or args.asr == 'large_v2' or args.asr == 'large_v3':
                     mel = log_mel_spectrogram(pad_or_trim(wavs), n_mels=128).unsqueeze(0)
                 else:
                     mel = log_mel_spectrogram(pad_or_trim(wavs)).unsqueeze(0)
