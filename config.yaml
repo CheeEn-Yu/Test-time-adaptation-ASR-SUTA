@@ -4,7 +4,7 @@
 # asr: pretrained_models/stt_en_conformer_ctc_small_ls.nemo
 # processor: pretrained_models/wav2vec2-base-100h-with-lm/language_model
 # asr: pretrained_models/stt_en_conformer_transducer_small.nemo
-asr: tiny
+asr: base
 train_feature: true
 encoderLN: true
 decoderLN: true
