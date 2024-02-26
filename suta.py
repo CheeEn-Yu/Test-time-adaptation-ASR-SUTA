@@ -130,13 +130,6 @@ def whisper_collect_params(model, encoderLN, decoderLN, train_feature=False):
                             params.append(p)
                             names.append(f"{nm}.{np}")
 
-            else:
-                for np, p in m.named_parameters():
-                    if np in trainable:  
-                        p.requires_grad = True
-                        params.append(p)
-                        names.append(f"{nm}.{np}")
-
         # train_feature
         if train_feature:
             if len(str(nm).split('.')) > 1:
