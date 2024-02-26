@@ -32,17 +32,17 @@ from suta import *
 from omegaconf import OmegaConf
 args = OmegaConf.load("config.yaml")
 
-dataset = load_dataset(['test-other'], 'librispeech', 'LibriSpeech', 1, extra_noise=0.01)
+dataset = load_dataset(['test-other'], 'librispeech', 'LibriSpeech', 1, extra_noise=args.extra_noise)
 
 teacher_tokens = []
 from whisper.normalizers import EnglishTextNormalizer
 normalizer = EnglishTextNormalizer()
 options = whisper.DecodingOptions(language="en", without_timestamps=True)
 exp_name = 'ex_data/suta_ex'
-with open(f'{exp_name}/transcript.txt', 'a') as f:
+with open(f'{exp_name}/base_no_noise.txt', 'a') as f:
 
     for count, batch in tqdm(enumerate(dataset)):
-        if count > 100:
+        if count > 1000:
             break
         # load model
         model = whisper.load_model(args.asr)
@@ -73,7 +73,7 @@ with open(f'{exp_name}/transcript.txt', 'a') as f:
             text = result.text
             ori_wer = wer(normalizer(texts[0]), normalizer(text))
             wers.append(ori_wer)
-        f.write(f'ori({ori_wer}):{text}\n')
+        f.write(f'ori({ori_wer}):{normalizer(text)}\n')
         del result
         torch.cuda.empty_cache()
         
@@ -137,32 +137,34 @@ with open(f'{exp_name}/transcript.txt', 'a') as f:
             task.inference.cleanup_caching()
 
             # output after adaptation
-            options = whisper.DecodingOptions(language="en", without_timestamps=True)
-            task = DecodingTask(model, options)
-            with torch.no_grad():
-                after_text = model.decode(mel, options)[0].text
-            after_wer = wer(normalizer(texts[0]), normalizer(after_text))
-            f.write(f'step{step}({after_wer}): {after_text}\n')
-            wers.append(after_wer)
+            check_list = [0,2,4,9,12,15,19]
+            if step in check_list:
+                options = whisper.DecodingOptions(language="en", without_timestamps=True)
+                task = DecodingTask(model, options)
+                with torch.no_grad():
+                    after_text = model.decode(mel, options)[0].text
+                after_wer = wer(normalizer(texts[0]), normalizer(after_text))
+                f.write(f'step{step}({after_wer}): {normalizer(after_text)}\n')
+                wers.append(after_wer)
             del logits
             torch.cuda.empty_cache()
 
-        # plot loss curve and wer
-        fig, ax1 = plt.subplots()
-        color = 'tab:red'
-        ax1.set_xlabel('step')
-        ax1.set_ylabel('loss', color=color)
-        ax1.plot([loss.cpu().detach() for loss in losses], color=color)
-        ax1.tick_params(axis='y', labelcolor=color)
+        # # plot loss curve and wer
+        # fig, ax1 = plt.subplots()
+        # color = 'tab:red'
+        # ax1.set_xlabel('step')
+        # ax1.set_ylabel('loss', color=color)
+        # ax1.plot([loss.cpu().detach() for loss in losses], color=color)
+        # ax1.tick_params(axis='y', labelcolor=color)
 
-        # 在右側 y 軸上繪製 data2
-        ax2 = ax1.twinx()  # 共享 x 軸
-        color = 'tab:blue'
-        ax2.set_ylabel('wer', color=color)
-        ax2.plot(wers, color=color)
-        ax2.tick_params(axis='y', labelcolor=color)
-        plt.title(f'idx:{count}')
-        plt.savefig(f'./ex_data/suta_ex/suta_{count}.png')
+        # # 在右側 y 軸上繪製 data2
+        # ax2 = ax1.twinx()  # 共享 x 軸
+        # color = 'tab:blue'
+        # ax2.set_ylabel('wer', color=color)
+        # ax2.plot(wers, color=color)
+        # ax2.tick_params(axis='y', labelcolor=color)
+        # plt.title(f'idx:{count}')
+        # plt.savefig(f'./ex_data/suta_ex/suta_{count}.png')
 
         f.write("=======================================\n")
         

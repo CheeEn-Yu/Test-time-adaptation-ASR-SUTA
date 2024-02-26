@@ -42,7 +42,7 @@ seed: 42
 ### optimizer & train hyparameters & learning rate scheduler
 opt: AdamW
 train_params: [all] # currently supported: all, feature, enc, dec, joint, LN, BN, ...
-steps: 10
+steps: 20
 episodic: true # load pretrained model again for every batch
 
 lr: 4e-5
