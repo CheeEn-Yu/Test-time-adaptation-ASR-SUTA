@@ -63,6 +63,10 @@ def create_dataset(split, name, path, batch_size=1):
         from corpus.l2arctic import L2ArcticDataset as Dataset
     elif name.lower() == "aishell3":
         from corpus.aishell3 import AIShellDataset as Dataset
+    elif name.lower() == "voicebank":
+        from corpus.voicebank import VoicebankDataset as Dataset
+    elif name.lower() == "noisy":
+        from corpus.noisylibri import noisyLibriDataset as Dataset
         
     else:
         raise NotImplementedError
@@ -74,7 +78,7 @@ def create_dataset(split, name, path, batch_size=1):
     return dataset, loader_bs
 
 
-def load_dataset(split=None, name='librispeech', path=None, batch_size=11, extra_noise=0., num_workers=4):
+def load_dataset(split=None, name='librispeech', path=None, batch_size=1, extra_noise=0., num_workers=4):
     ''' Prepare dataloader for training/validation'''
     dataset, loader_bs = create_dataset(split, name, path, batch_size)
     collate_fn = partial(collect_audio_batch, extra_noise=extra_noise)
