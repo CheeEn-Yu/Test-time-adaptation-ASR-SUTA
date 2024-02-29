@@ -7,3 +7,5 @@ ex_data/
 /LibriSpeech
 test.ipynb
 /aishell_test
+/noisy_testset_wav
+/testset_txt

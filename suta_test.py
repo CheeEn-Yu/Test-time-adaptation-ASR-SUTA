@@ -1,5 +1,5 @@
 import os
-import gc
+import numpy as np
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -32,17 +32,18 @@ from suta import *
 from omegaconf import OmegaConf
 args = OmegaConf.load("config.yaml")
 
-dataset = load_dataset(['test-other'], 'librispeech', 'LibriSpeech', 1, extra_noise=args.extra_noise)
+dataset = load_dataset(name='noisy', path='./noisy_LibriSpeech', batch_size=1)
+# dataset = load_dataset(['test-other'], 'librispeech', 'LibriSpeech', 1, extra_noise=args.extra_noise)
 
 teacher_tokens = []
 from whisper.normalizers import EnglishTextNormalizer
 normalizer = EnglishTextNormalizer()
 options = whisper.DecodingOptions(language="en", without_timestamps=True)
-exp_name = 'ex_data/suta_ex'
+exp_name = 'ex_data/suta_ex_sure'
 with open(f'{exp_name}/base_no_noise.txt', 'a') as f:
 
     for count, batch in tqdm(enumerate(dataset)):
-        if count > 1000:
+        if count > 100:
             break
         # load model
         model = whisper.load_model(args.asr)
@@ -64,7 +65,7 @@ with open(f'{exp_name}/base_no_noise.txt', 'a') as f:
         else:
             mel = log_mel_spectrogram(pad_or_trim(wavs[0])).unsqueeze(0).to(DEVICE)
 
-        losses = []
+        step_loss = []
         wers = []
         # original whisper output
         with torch.no_grad():
@@ -109,15 +110,17 @@ with open(f'{exp_name}/base_no_noise.txt', 'a') as f:
 
                 # SUTA
                 e_loss = softmax_entropy(logits.unsqueeze(0) / args.temp).mean(0).mean()
-                loss += e_loss * args.em_coef
                 c_loss = mcc_loss(logits.unsqueeze(0) / args.temp, class_num=args.topk)
-                loss += c_loss * (1 - args.em_coef)
+                loss = e_loss * args.em_coef + c_loss * (1 - args.em_coef)
+                if entropy_list is None:
+                    entropy_list = loss.unsqueeze(0)
+                else:
+                    entropy_list = torch.cat((loss.unsqueeze(0), entropy_list), dim=-1)
 
                 # # GEM
                 # entropy = torch.log(torch.pow(logits.softmax(dim=-1), args.renyi_entropy_alpha).sum(dim=-1)) # entropy: B, L
                 # entropy = entropy / (1 - args.renyi_entropy_alpha)
                 # entropy = entropy.mean()
-                # if entropy_list is None:
                 #     entropy_list = entropy.unsqueeze(0)
                 # else:
                 #     entropy_list = torch.cat((entropy.unsqueeze(0), entropy_list), dim=-1)
@@ -129,9 +132,26 @@ with open(f'{exp_name}/base_no_noise.txt', 'a') as f:
 
             # e_loss = entropy_list.mean()
             # loss = args.ns_coef * negative_loss + e_loss
-            losses.append(loss)
+            if step == 0:
+                fig0, ax0 = plt.subplots()
+                color = 'tab:red'
+                ax0.set_xlabel('token')
+                ax0.set_ylabel('entropy', color=color)
+                ax0.plot([frame.cpu().detach() for frame in entropy_list], color=color)
+                ax0.tick_params(axis='y', labelcolor=color)
+            if step == 19:
+                ax3 = ax0.twinx()  # 共享 x 軸
+                color = 'tab:blue'
+                ax0.set_xlabel('token')
+                ax0.set_ylabel('entropy', color=color)
+                ax0.plot([frame.cpu().detach() for frame in entropy_list], color=color, alpha=0.5, linewidth=2)
+                ax0.tick_params(axis='y', labelcolor=color)
+                plt.title(f'entropy of idx:{count}')
+                plt.savefig(f'{exp_name}/entropy_{count}.png')
+            loss = entropy_list.mean()
             if step==0:
-                losses.append(loss)
+                step_loss.append(loss)
+            step_loss.append(loss)
             loss.backward()
             optimizer.step()
             task.inference.cleanup_caching()
@@ -146,25 +166,25 @@ with open(f'{exp_name}/base_no_noise.txt', 'a') as f:
                 after_wer = wer(normalizer(texts[0]), normalizer(after_text))
                 f.write(f'step{step}({after_wer}): {normalizer(after_text)}\n')
                 wers.append(after_wer)
-            del logits
-            torch.cuda.empty_cache()
+        del logits
+        torch.cuda.empty_cache()
 
-        # # plot loss curve and wer
-        # fig, ax1 = plt.subplots()
-        # color = 'tab:red'
-        # ax1.set_xlabel('step')
-        # ax1.set_ylabel('loss', color=color)
-        # ax1.plot([loss.cpu().detach() for loss in losses], color=color)
-        # ax1.tick_params(axis='y', labelcolor=color)
+        # plot loss curve and wer
+        fig, ax1 = plt.subplots()
+        color = 'tab:red'
+        ax1.set_xlabel('step')
+        ax1.set_ylabel('loss', color=color)
+        ax1.plot([loss.cpu().detach() for loss in step_loss], color=color)
+        ax1.tick_params(axis='y', labelcolor=color)
 
-        # # 在右側 y 軸上繪製 data2
-        # ax2 = ax1.twinx()  # 共享 x 軸
-        # color = 'tab:blue'
-        # ax2.set_ylabel('wer', color=color)
-        # ax2.plot(wers, color=color)
-        # ax2.tick_params(axis='y', labelcolor=color)
-        # plt.title(f'idx:{count}')
-        # plt.savefig(f'./ex_data/suta_ex/suta_{count}.png')
+        # 在右側 y 軸上繪製 data2
+        ax2 = ax1.twinx()  # 共享 x 軸
+        color = 'tab:blue'
+        ax2.set_ylabel('wer', color=color)
+        ax2.plot(wers, color=color)
+        ax2.tick_params(axis='y', labelcolor=color)
+        plt.title(f'idx:{count}')
+        plt.savefig(f'{exp_name}/suta_{count}.png')
 
         f.write("=======================================\n")
         
