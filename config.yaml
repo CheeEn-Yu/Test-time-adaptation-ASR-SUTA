@@ -4,9 +4,9 @@
 # asr: pretrained_models/stt_en_conformer_ctc_small_ls.nemo
 # processor: pretrained_models/wav2vec2-base-100h-with-lm/language_model
 # asr: pretrained_models/stt_en_conformer_transducer_small.nemo
-asr: base
+asr: tiny
 train_feature: true
-encoderLN: true
+encoderLN: false
 decoderLN: true
 processor: null
 topk: 30
@@ -42,7 +42,7 @@ seed: 42
 ### optimizer & train hyparameters & learning rate scheduler
 opt: AdamW
 train_params: [all] # currently supported: all, feature, enc, dec, joint, LN, BN, ...
-steps: 20
+steps: 5
 episodic: true # load pretrained model again for every batch
 
 lr: 4e-5
