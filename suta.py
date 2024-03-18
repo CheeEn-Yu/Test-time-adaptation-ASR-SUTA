@@ -3,10 +3,11 @@ import gc
 import torch
 import pandas as pd
 from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch import nn
 from jiwer import wer
 
-def setup_optimizer(params, opt_name='AdamW', lr=1e-4, beta=0.9, weight_decay=0., scheduler=None, step_size=1, gamma=0.7):
+def setup_optimizer(args, params, opt_name='AdamW', lr=1e-4, beta=0.9, weight_decay=0., scheduler=None, step_size=1, gamma=0.7):
     opt = getattr(torch.optim, opt_name)
     print(f'[INFO]    optimizer: {opt}')
     print(f'[INFO]    scheduler: {scheduler}')
@@ -19,7 +20,7 @@ def setup_optimizer(params, opt_name='AdamW', lr=1e-4, beta=0.9, weight_decay=0.
         optimizer = opt(params, lr=lr, weight_decay=weight_decay)
     
     if scheduler is not None: 
-        return optimizer, eval(scheduler)(optimizer, step_size=step_size, gamma=gamma)
+        return optimizer, eval(scheduler)(optimizer, T_max=args.t_max, eta_min=args.lr_min)
     else: 
         return optimizer, None
 
@@ -41,8 +42,6 @@ def mcc_loss(x, reweight=False, dim=2, class_num=32):
 
     cov_matrix_t = cov_matrix_t / torch.sum(cov_matrix_t, dim=1)
     mcc_loss = (torch.sum(cov_matrix_t) - torch.trace(cov_matrix_t)) / class_num
-    del cov_matrix_t
-    gc.collect()
    
     return mcc_loss
 
@@ -108,7 +107,7 @@ def whisper_collect_params(model, encoderLN, decoderLN, train_feature=False):
     params = []
     names = []
 
-    for name, param in model.named_parameters():
+    for param in model.parameters():
         param.requires_grad = False
 
     for nm, m in model.named_modules():
@@ -135,9 +134,19 @@ def whisper_collect_params(model, encoderLN, decoderLN, train_feature=False):
             if len(str(nm).split('.')) > 1:
                 if str(nm).split('.')[0] == 'encoder' and (str(nm).split('.')[1] == 'conv1' or str(nm).split('.')[1] == 'conv2'):
                     for np, p in m.named_parameters():
-                        p.requires_grad = True
-                        params.append(p)
-                        names.append(f"{nm}.{np}")
+                        if np == 'bias':
+                            p.requires_grad = True
+                            params.append(p)
+                            names.append(f"{nm}.{np}")
+
+        # cross attention bias
+        # if 'cross_attn' in nm.split('.'):
+        #     if 'query' in nm.split('.') or 'value' in nm.split('.'):
+        #         for np, p in m.named_parameters():
+        #             if np in trainable and np == 'bias':
+        #                 p.requires_grad = True
+        #                 params.append(p)
+        #                 names.append(f"{nm}.{np}")
 
     return params, names
 
