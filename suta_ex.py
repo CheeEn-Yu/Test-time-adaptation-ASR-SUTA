@@ -10,8 +10,8 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 import whisper
-from dataclasses import dataclass, field, replace
 from whisper.decoding import DecodingTask
+from whisper.tokenizer import get_tokenizer
 from whisper.audio import (
     log_mel_spectrogram,
     pad_or_trim,
@@ -35,16 +35,15 @@ from omegaconf import OmegaConf
 args = OmegaConf.load("config.yaml")
 
 dataset = load_dataset(name='noisy', path='./noisy_LibriSpeech', batch_size=1)
-# dataset = load_dataset(['test-other'], 'librispeech', 'LibriSpeech', 1, extra_noise=args.extra_noise)
 
 from whisper.normalizers import EnglishTextNormalizer
 normalizer = EnglishTextNormalizer()
 options = whisper.DecodingOptions(language="en", without_timestamps=True)
-exp_name = 'ex_data/gem_lpf'
+tokenizer = get_tokenizer(True)
+exp_name = 'ex_data/suta_fix_token'
 with open(f'{exp_name}/{args.asr}_noise.txt', 'a') as f:
 
     for count, batch in tqdm(enumerate(dataset)):
-        teacher_tokens = []
         if count > 50:
             break
         # load model
@@ -54,7 +53,8 @@ with open(f'{exp_name}/{args.asr}_noise.txt', 'a') as f:
 
         # set training param
         params, names = whisper_collect_params(model, args.encoderLN, args.decoderLN, train_feature=args.train_feature)
-        print(f'training parameter: {names}')
+        if count == 0:
+            print(f'training parameter: {names}')
         optimizer, scheduler = setup_optimizer(args, params, args.opt, args.lr, weight_decay=1e-4, scheduler=args.scheduler)
 
         # unzip batch
@@ -73,14 +73,13 @@ with open(f'{exp_name}/{args.asr}_noise.txt', 'a') as f:
         with torch.no_grad():
             result = model.decode(mel, options)[0]
             teacher_tokens = result.tokens
-            text = normalizer(result.text)
-            ori_wer = wer(normalizer(texts[0]), normalizer(text))
+            ori_text = normalizer(result.text)
+            ori_wer = wer(normalizer(texts[0]), ori_text)
             wers.append(ori_wer)
-        f.write(f'ori({ori_wer}):{text}\n')
+        f.write(f'ori({ori_wer}):{ori_text}\n')
         del result
         torch.cuda.empty_cache()
         
-        # teacher forcing to get logit
         options = whisper.DecodingOptions(language="en", without_timestamps=True)
         task = DecodingTask(model, options)
         if options.beam_size is not None:
@@ -88,7 +87,7 @@ with open(f'{exp_name}/{args.asr}_noise.txt', 'a') as f:
         else:
             n_batch = 1
 
-        # SGEM or SUTA
+        # TTA
         for step in range(args.steps):
             model.zero_grad()
             audio_features = task._get_audio_features(mel)
@@ -99,42 +98,62 @@ with open(f'{exp_name}/{args.asr}_noise.txt', 'a') as f:
             loss = 0
             entropy_list = None
             negative_loss = 0
-            for i in range(len(teacher_tokens)):
-                added_token = torch.Tensor([[teacher_tokens[i]]]).long().expand(tokens.shape[0], 1).to(DEVICE)
-                tokens = torch.cat((tokens, added_token), dim=1)
-                logits = task.inference.logits(tokens, audio_features) # (1,2,51864)
-                
-                logits = logits[:, -1]
-                for logit_filter in task.logit_filters:
-                    logit_filter.apply(logits, tokens)
-                
-                logits = torch.topk(logits, k=30).values
+            try:
+                for i in range(task.sample_len):
+                    logits = task.inference.logits(tokens, audio_features) # (1,2,51864)
+                    
+                    logits = logits[:, -1]
+                    for logit_filter in task.logit_filters:
+                        logit_filter.apply(logits, tokens)
+                    tokens, completed = task.decoder.update(tokens, logits, sum_logprobs)
+                    if completed or tokens.shape[-1] > task.n_ctx:
+                        break
+                    
+                    logits = torch.topk(logits, k=30).values
 
-                # SUTA
-                # e_loss = softmax_entropy(logits.unsqueeze(0) / args.temp).mean(0).mean()
-                # c_loss = mcc_loss(logits.unsqueeze(0) / args.temp, class_num=args.topk)
-                # loss = e_loss * args.em_coef + c_loss * (1 - args.em_coef)
-                # if entropy_list is None:
-                #     entropy_list = loss.unsqueeze(0)
-                # else:
-                #     entropy_list = torch.cat((loss.unsqueeze(0), entropy_list), dim=-1)
+                    e_loss = softmax_entropy(logits.unsqueeze(0) / args.temp).mean(0).mean()
+                    c_loss = mcc_loss(logits.unsqueeze(0) / args.temp, class_num=args.topk)
+                    word_loss = e_loss * args.em_coef + c_loss * (1 - args.em_coef)
+                    if entropy_list is None:
+                        entropy_list = word_loss.unsqueeze(0)
+                    else:
+                        entropy_list = torch.cat((word_loss.unsqueeze(0), entropy_list), dim=-1)
+            finally:
+                pass
 
-                # # GEM
-                entropy = torch.log(torch.pow(logits.softmax(dim=-1), args.renyi_entropy_alpha).sum(dim=-1)) # entropy: B, L
-                entropy = entropy / (1 - args.renyi_entropy_alpha)
-                entropy = entropy.mean()
-                if entropy_list is None:
-                    entropy_list = entropy.unsqueeze(0)
-                else:
-                    entropy_list = torch.cat((entropy.unsqueeze(0), entropy_list), dim=-1)
 
-                # # NS
-            #     negative_outputs = logits.clone()
-            #     negative_mask = torch.where(torch.softmax(negative_outputs, dim=-1) < args.ns_threshold * (10 / negative_outputs.shape[-1]), 1, 0)
-            #     negative_loss += torch.mean(-torch.log(1 - torch.sum(negative_mask * torch.softmax(negative_outputs / args.temp, dim=-1), dim=-1)))
+            # weighted entropy loss
+            weight = 1/(1+100*torch.exp(-entropy_list))
+            loss = (weight*entropy_list).sum()/ weight.sum()
+            # fix token under mean
+            if step == 0:
+                avg = entropy_list.mean()
+                adapted_idx = torch.nonzero(entropy_list > avg).squeeze().cpu()
 
-            # e_loss = entropy_list.mean()
-            # loss = args.ns_coef * negative_loss + e_loss
+            # high mean
+            # mean = entropy_list.mean()
+            # entropy_list = entropy_list[entropy_list > mean]
+            # loss = entropy_list.mean()
+
+            # lpf_entropy_list = torch.fft.fft(entropy_list)
+            # n = len(lpf_entropy_list)
+            # center = n // 2
+            # low_pass_filter = torch.ones_like(lpf_entropy_list)
+            # low_pass_filter[center:] = 0
+            # lpf_entropy_list = lpf_entropy_list *low_pass_filter
+            # lpf_entropy_list = torch.fft.ifft(lpf_entropy_list).real
+            # mse_loss = torch.nn.MSELoss()
+            # loss = mse_loss(entropy_list, lpf_entropy_list)
+
+            if step==0:
+                step_loss.append(loss)
+            step_loss.append(loss)
+            loss.backward()
+            optimizer.step()
+            task.inference.cleanup_caching()
+            if args.scheduler is not None:
+                scheduler.step()
+
             if step == 0:
                 fig0, ax0 = plt.subplots(1,2,figsize=(15,6))
                 color = 'tab:red'
@@ -149,35 +168,7 @@ with open(f'{exp_name}/{args.asr}_noise.txt', 'a') as f:
                 ax0[0].plot([frame.cpu().detach() for frame in entropy_list], color=color, alpha=0.5, linewidth=2)
                 ax0[0].tick_params(axis='y', labelcolor=color)
                 plt.title(f'entropy of idx:{count}')
-            # weighted entropy loss
-            # loss = 1/(1+torch.exp(-entropy_list))*entropy_list
-            # loss = loss.mean()
-                
-            # high mean
-            # mean = entropy_list.mean()
-            # entropy_list = entropy_list[entropy_list > mean]
-            # loss = entropy_list.mean()
 
-            # hpf entropy list mean
-            # entropy_list = torch.fft.fft(entropy_list)
-            # n = len(entropy_list)
-            # center = n // 2
-            # high_pass_filter = torch.ones_like(entropy_list)
-            # high_pass_filter[center] = 0
-            # entropy_list = entropy_list *high_pass_filter
-            # entropy_list = torch.fft.ifft(entropy_list).real
-            # loss = entropy_list.mean() 
-            
-            # lpf entropy list mse
-            lpf_entropy_list = torch.fft.fft(entropy_list)
-            n = len(lpf_entropy_list)
-            center = n // 2
-            low_pass_filter = torch.ones_like(lpf_entropy_list)
-            low_pass_filter[center:] = 0
-            lpf_entropy_list = lpf_entropy_list *low_pass_filter
-            lpf_entropy_list = torch.fft.ifft(lpf_entropy_list).real
-            mse_loss = torch.nn.MSELoss()
-            loss = mse_loss(entropy_list, lpf_entropy_list)
 
             # output after adaptation
             check_list = [0,2,4,9,12,15,19]
@@ -185,11 +176,16 @@ with open(f'{exp_name}/{args.asr}_noise.txt', 'a') as f:
                 options = whisper.DecodingOptions(language="en", without_timestamps=True)
                 task = DecodingTask(model, options)
                 with torch.no_grad():
-                    after_text = model.decode(mel, options)[0].text
+                    adapted_tokens = model.decode(mel, options)[0].tokens
+                for i in adapted_idx:
+                    if i < len(teacher_tokens) and i < len(adapted_tokens) and teacher_tokens[i] != adapted_tokens[i]:
+                        teacher_tokens[i] = adapted_tokens[i]
+                # decode token
+                after_text = tokenizer.decode(teacher_tokens).strip()
                 normalized_label = normalizer(texts[0])
                 after_text = normalizer(after_text)
                 after_wer = wer(normalized_label, after_text)
-                result = jiwer.compute_measures(text, after_text)
+                result = jiwer.compute_measures(ori_text, after_text)
                 word_change = result['substitutions']+result['insertions']+result['deletions']
                 f.write(f'step{step}({after_wer}): {after_text}\n')
                 word_changes.append(word_change)
@@ -198,23 +194,23 @@ with open(f'{exp_name}/{args.asr}_noise.txt', 'a') as f:
         torch.cuda.empty_cache()
 
         # plot loss curve and wer
-        # color = 'tab:red'
-        # ax0[1].set_xlabel('step')
-        # ax0[1].set_ylabel('loss', color=color)
-        # ax0[1].plot([loss.cpu().detach() for loss in step_loss], color=color)
-        # ax0[1].tick_params(axis='y', labelcolor=color)
+        color = 'tab:red'
+        ax0[1].set_xlabel('step')
+        ax0[1].set_ylabel('loss', color=color)
+        ax0[1].plot([loss.cpu().detach() for loss in step_loss], color=color)
+        ax0[1].tick_params(axis='y', labelcolor=color)
 
         # plot wers
-        # ax2 = ax0[1].twinx()  # 共享 x 軸
+        ax2 = ax0[1].twinx()  # 共享 x 軸
         color = 'tab:blue'
-        ax0[1].set_xlabel('step')
-        ax0[1].set_ylabel('wer', color=color)
+        ax2.set_xlabel('step')
+        ax2.set_ylabel('wer', color=color)
         if args.steps == 20:
             check_list = [0,1,3,5,10,13,16,20]
         else:
             check_list = [0,1,3,5,10]
-        ax0[1].plot(check_list, wers, color=color)
-        ax0[1].tick_params(axis='y', labelcolor=color)
+        ax2.plot(check_list, wers, color=color)
+        ax2.tick_params(axis='y', labelcolor=color)
 
         # plot number of word change
         ax3 = ax0[1].twinx()  # 共享 x 軸
