@@ -3,7 +3,9 @@ __pycache__
 *.wav
 ex_data/
 /LibriSpeech
-test.ipynb
+test*
 /aishell_test
 /noisy_testset_wav
 /testset_txt
+/pretrained_models
+/model
