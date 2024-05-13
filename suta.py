@@ -61,7 +61,7 @@ def div_loss(x, non_blank=None, L_thd=64):
 
     return loss
 
-def collect_params(model, bias_only=False, train_feature=False, train_all=False, train_LN=True):
+def SB_collect_params(model, bias_only=False, train_feature=False, train_all=False, train_LN=True):
     """Collect the affine scale + shift parameters from batch norms.
 
     Walk the model's modules and collect all batch normalization parameters.

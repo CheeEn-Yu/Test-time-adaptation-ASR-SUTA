@@ -40,7 +40,7 @@ from whisper.normalizers import EnglishTextNormalizer
 normalizer = EnglishTextNormalizer()
 options = whisper.DecodingOptions(language="en", without_timestamps=True)
 tokenizer = get_tokenizer(True)
-exp_name = 'ex_data/suta_fix_token'
+exp_name = 'ex_data/suta_weighted_low'
 with open(f'{exp_name}/{args.asr}_noise.txt', 'a') as f:
 
     for count, batch in tqdm(enumerate(dataset)):
@@ -122,8 +122,16 @@ with open(f'{exp_name}/{args.asr}_noise.txt', 'a') as f:
                 pass
 
 
-            # weighted entropy loss
+            # weighted entropy loss (focus on high entropy token)
             weight = 1/(1+100*torch.exp(-entropy_list))
+            loss = (weight*entropy_list).sum()/ weight.sum()
+            # fix token under mean
+            if step == 0:
+                avg = entropy_list.mean()
+                adapted_idx = torch.nonzero(entropy_list > avg).squeeze().cpu()
+
+            # weighted entropy loss (focus on low entropy token)
+            weight = 1/(1-100*torch.exp(-entropy_list))
             loss = (weight*entropy_list).sum()/ weight.sum()
             # fix token under mean
             if step == 0:
