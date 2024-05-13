@@ -8,11 +8,12 @@ asr: tiny
 train_feature: true
 encoderLN: false
 decoderLN: true
+train_all: false
 processor: null
 topk: 30
 ### dataset
 dataset_name: librispeech
-dataset_dir: ./LibriSpeech
+dataset_dir: ../TTA_data/noisy_LibriSpeech
 # dataset_name: chime
 # dataset_dir: /home/server17/hdd/changhun_workspace/CHiME3
 # dataset_name: ted
@@ -42,7 +43,7 @@ seed: 42
 ### optimizer & train hyparameters & learning rate scheduler
 opt: AdamW
 train_params: [all] # currently supported: all, feature, enc, dec, joint, LN, BN, ...
-steps: 5
+steps: 20
 episodic: true # load pretrained model again for every batch
 
 lr: 4e-5
