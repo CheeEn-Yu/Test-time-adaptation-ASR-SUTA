@@ -62,14 +62,17 @@ if __name__ == '__main__':
     processor = Speech2TextProcessor.from_pretrained("facebook/s2t-large-librispeech-asr")
     feature_extractor = AutoFeatureExtractor.from_pretrained("facebook/s2t-small-librispeech-asr")
     dataset = load_dataset(name='noisy', path=args.dataset_dir, batch_size=1)
-    exp_name = 'ex_data/suta_s2t_pseudo_0521'
+    exp_name = 'ex_data/suta_s2t_sft'
     os.makedirs(exp_name, exist_ok=True)
 
     loss_fn = nn.CrossEntropyLoss()
     with open(f'{exp_name}/log.txt', 'a') as f:
         for count, batch in enumerate(dataset):
+            if count > 50:
+                break
             step_loss, wers = [], []
             lens, wavs, texts, files = batch
+            label_id = [processor.tokenizer.encode(texts[0])]
             f.write(f'idx:{count}'+'\n')
             f.write('label:'+normalizer(texts[0])+'\n')
             
@@ -93,33 +96,34 @@ if __name__ == '__main__':
                 f.write(f'ori({ori_wer}):{ori_text}\n')
 
             for step in range(args.steps):
-                optimizer.zero_grad()
                 input_ids = torch.tensor([[1]]) * model.config.decoder_start_token_id
                 input_ids = input_ids.to(DEVICE)
 
                 # Teacher forcing
-                loss = 0
                 record_loss = 0
-                for i in range(ori_generated_ids.shape[1]):
+                teacher_forcing_step = len(label_id[0])
+                for i in range(teacher_forcing_step):
                     logits = model(input_features, decoder_input_ids=input_ids).logits
                     next_token_logit = logits[:,-1,:]
                     # create soft label
-                    pseudo_logit = torch.full((1,10000), 1e-6).to(DEVICE)
-                    teacher_token = 2
-                    if i+1 < ori_generated_ids.shape[1]:
-                        teacher_token = ori_generated_ids[0][i+1]
-                        pseudo_logit[0][teacher_token] = 1
-                    
-                    loss = loss_fn(next_token_logit, pseudo_logit)
+                    label_logit = torch.full((1,10000), 1e-6).to(DEVICE)
+                    teacher_token = 2  # init as eos
+                    if i+1 < teacher_forcing_step:
+                        teacher_token = label_id[0][i+1]
+                    label_logit[0][teacher_token] = 1
+
+                    loss = loss_fn(next_token_logit, label_logit)
                     record_loss += loss.item()
                     loss.backward()
                     input_ids = torch.cat([input_ids, torch.tensor([[teacher_token]]).to(DEVICE)], dim=-1)
                     
+                    
                     # try scheduled sampling
                     # pred_next_tokens = torch.argmax(next_token_logit, dim=-1).to(DEVICE)
                     # input_ids = torch.cat([input_ids, next_tokens[:, None]], dim=-1)
-                step_loss.append(record_loss / ori_generated_ids.shape[1])
+                step_loss.append(record_loss / teacher_forcing_step)
                 optimizer.step()
+                optimizer.zero_grad()
                 if step % 3 == 0 or step == args.steps-1:
                     with torch.no_grad():
                         generated_ids, logits = model.generate(input_features, num_beams=1, do_sample=False)
