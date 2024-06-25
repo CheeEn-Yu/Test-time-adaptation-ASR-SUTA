@@ -7,6 +7,21 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch import nn
 from jiwer import wer
 
+def my_greedy_decode(model, input_features, max_step):
+    # greedy decode for pseudo label
+    ori_generated_ids = torch.tensor([[1]]) * model.config.decoder_start_token_id
+    ori_generated_ids = ori_generated_ids.to('cuda')
+
+    decode_step = 0
+    while(decode_step < max_step):
+        logits = model(input_features.to('cuda'), decoder_input_ids=ori_generated_ids).logits
+        next_token_logit = logits[:,-1,:]
+        next_tokens = torch.argmax(next_token_logit, dim=-1).to('cuda')
+        ori_generated_ids = torch.cat([ori_generated_ids, next_tokens[:, None]], dim=-1)
+        if next_tokens == 2:
+            break
+    return ori_generated_ids
+
 def setup_optimizer(args, params, opt_name='AdamW', lr=1e-4, beta=0.9, weight_decay=0., scheduler=None, step_size=1, gamma=0.7):
     opt = getattr(torch.optim, opt_name)
     print(f'[INFO]    optimizer: {opt}')
@@ -60,6 +75,24 @@ def div_loss(x, non_blank=None, L_thd=64):
     loss = -softmax_entropy(cls_pred, 0)
 
     return loss
+
+def HF_collect_params(args, model):
+    model.requires_grad_(False)
+    params = []
+    names = []
+    for name, param in model.named_parameters():
+        if 'feature' in args.train_params:
+            if 'conv' in str(name).split('.'):
+                param.requires_grad = True
+                params.append(param)
+                names.append(f"{name}")
+        if 'LN' in args.train_params:
+            if 'self_attn_layer_norm' in str(name).split('.'):
+                param.requires_grad = True
+                params.append(param)
+                names.append(f"{name}")
+
+    return names, params
 
 def SB_collect_params(model, bias_only=False, train_feature=False, train_all=False, train_LN=True):
     """Collect the affine scale + shift parameters from batch norms.
