@@ -1,17 +1,21 @@
-exp_name: ex_data/suta_s2t_test
-p_ratio: 1
-asr: tiny
+exp_name: ex_data/suta_s2t_noisy_all
 topk: 30
 train_params: [feature, LN] # currently supported: all, feature, LN, ...
-steps: 20
+steps: 10
+### optimizer & train hyparameters & learning rate scheduler
+opt: AdamW
+episodic: true # load pretrained model again for every batch
+temp: 2.5 # temperature scaling
+em_coef: 0.5 # for balancing entropy minimization and minimum class confusion for baseline
+p_ratio: 1
 lr: 4e-5
-scheduler: CosineAnnealingLR # null or CosineAnnealingLR
+scheduler: null # null or CosineAnnealingLR
 t_max: 10
 lr_min: 2e-5
 ### dataset
 noise_type: null # currently supported: null, AirConditioner_6, AirportAnnouncements_2, Babble_4, CopyMachine_2, Munching_3, Neighbor_6, ShuttingDoor_6, Typing_2
 dataset_name: librispeech
-dataset_dir: ../TTA_data/noisy_LibriSpeech
+dataset_dir: ../TTA_data/test
 
 extra_noise: 0.00
 noise_snr: 10
@@ -23,11 +27,3 @@ device: cuda
 
 ### seed for reproductivity
 seed: 42
-
-### optimizer & train hyparameters & learning rate scheduler
-opt: AdamW
-episodic: true # load pretrained model again for every batch
-temp: 2.5 # temperature scaling
-em_coef: 0.5 # for balancing entropy minimization and minimum class confusion for baseline
-not_blank: true
-certain_only: true
