@@ -22,10 +22,11 @@ def my_greedy_decode(model, input_features, max_step):
             break
     return ori_generated_ids
 
-def setup_optimizer(args, params, opt_name='AdamW', lr=1e-4, beta=0.9, weight_decay=0., scheduler=None, step_size=1, gamma=0.7):
+def setup_optimizer(args, params, opt_name='AdamW', lr=1e-4, beta=0.9, weight_decay=0., scheduler=None, step_size=1, gamma=0.7, verbose=False):
     opt = getattr(torch.optim, opt_name)
-    print(f'[INFO]    optimizer: {opt}')
-    print(f'[INFO]    scheduler: {scheduler}')
+    if verbose:
+        print(f'[INFO]    optimizer: {opt}')
+        print(f'[INFO]    scheduler: {scheduler}')
     if opt_name == 'Adam':       
         optimizer = opt(params,
                 lr=lr,

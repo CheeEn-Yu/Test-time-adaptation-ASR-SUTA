@@ -1,6 +1,4 @@
 import os
-import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
@@ -9,6 +7,7 @@ from tqdm import tqdm
 from jiwer import wer
 from data import *
 from suta import *
+import hydra
 from omegaconf import OmegaConf
 from transformers import Speech2TextProcessor, Speech2TextForConditionalGeneration, generation, AutoFeatureExtractor
 from whisper.normalizers import EnglishTextNormalizer
@@ -23,9 +22,8 @@ if torch.cuda.is_available():
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 MAX_DECODER_STEP = 512
 
-
-if __name__ == '__main__':
-    args = OmegaConf.load("config.yaml")
+@hydra.main(version_base=None, config_path=".", config_name="config")
+def main(args):
     normalizer = EnglishTextNormalizer()
     processor = Speech2TextProcessor.from_pretrained("facebook/s2t-large-librispeech-asr")
     feature_extractor = AutoFeatureExtractor.from_pretrained("facebook/s2t-small-librispeech-asr")
@@ -41,7 +39,7 @@ if __name__ == '__main__':
 
     loss_fn = nn.CrossEntropyLoss()
     with open(f'{args.exp_name}/result.txt', 'a') as f:
-        for count, batch in enumerate(dataset):
+        for count, batch in tqdm(enumerate(dataset)):
             p_loss_list, step_loss, wers = [], [], []
             lens, wavs, texts, files = batch
             f.write(f'idx:{count}'+'\n')
@@ -112,26 +110,31 @@ if __name__ == '__main__':
                     f.write(f'step{step}({after_wer}): {after_text}\n')
                     wers.append(after_wer)
 
-            fig0, ax0 = plt.subplots(1,1)
-            color = 'tab:red'
-            ax0.set_xlabel('step')
-            ax0.set_ylabel('loss', color=color)
-            ax0.plot([loss for loss in step_loss], color=color)
-            ax0.tick_params(axis='y', labelcolor=color)
+            # 10 figures are enough
+            if count < 5 or count >2930:
+                fig0, ax0 = plt.subplots(1,1)
+                color = 'tab:red'
+                ax0.set_xlabel('step')
+                ax0.set_ylabel('loss', color=color)
+                ax0.plot([loss for loss in step_loss], color=color)
+                ax0.tick_params(axis='y', labelcolor=color)
 
-            # plot wers
-            ax2 = ax0.twinx()  # 共享 x 軸
-            color = 'tab:blue'
-            ax2.set_xlabel('step')
-            ax2.set_ylabel('p_loss', color=color)
-            ax2.plot([loss for loss in p_loss_list], color=color)
-            ax2.tick_params(axis='y', labelcolor=color)
-            plt.title(f'idx:{count}')
-            plt.savefig(f'{args.exp_name}/figs/suta_{count}.png')
-            plt.close()
+                ax2 = ax0.twinx()  # 共享 x 軸
+                color = 'tab:blue'
+                ax2.set_xlabel('step')
+                ax2.set_ylabel('p_loss', color=color)
+                ax2.plot([loss for loss in p_loss_list], color=color)
+                ax2.tick_params(axis='y', labelcolor=color)
+                plt.title(f'idx:{count}')
+                plt.savefig(f'{args.exp_name}/figs/suta_{count}.png')
+                plt.close()
 
             f.write("=======================================\n")
     with open(f'{args.exp_name}/log.txt', 'a') as f:
         now = datetime.now()
         current_time = now.strftime("%Y-%m-%d %H:%M:%S")
         f.write(f'end time: {current_time}\n')
+
+
+if __name__ == '__main__':
+    main()
