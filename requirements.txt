@@ -8,3 +8,6 @@ cn2an
 openai-whisper
 opencc-python-reimplemented
 nltk
+transformers
+omegaconf
+hydra-core
