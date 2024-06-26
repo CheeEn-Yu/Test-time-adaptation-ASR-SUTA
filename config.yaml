@@ -1,4 +1,4 @@
-exp_name: ex_data/suta_s2t_noisy_all
+exp_name: ex_data/suta_s2t_0626test1
 topk: 30
 train_params: [feature, LN] # currently supported: all, feature, LN, ...
 steps: 10
