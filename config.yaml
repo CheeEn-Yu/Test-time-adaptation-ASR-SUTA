@@ -1,14 +1,18 @@
-exp_name: ex_data/suta_s2t_0626test1
+exp_name: ex_data/suta_whisper0711_test2
 topk: 30
 train_params: [feature, LN] # currently supported: all, feature, LN, ...
 steps: 10
+asr: tiny
+train_feature: true
+encoderLN: true
+decoderLN: true
 ### optimizer & train hyparameters & learning rate scheduler
 opt: AdamW
 episodic: true # load pretrained model again for every batch
 temp: 2.5 # temperature scaling
 em_coef: 0.5 # for balancing entropy minimization and minimum class confusion for baseline
 p_ratio: 1
-lr: 4e-5
+lr: 1e-4
 scheduler: null # null or CosineAnnealingLR
 t_max: 10
 lr_min: 2e-5
