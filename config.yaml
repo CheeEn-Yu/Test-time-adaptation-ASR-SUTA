@@ -1,7 +1,7 @@
-exp_name: ex_data/suta_whisper0711_test2
+exp_name: ex_data/suta_accelerate_0725
 topk: 30
 train_params: [feature, LN] # currently supported: all, feature, LN, ...
-steps: 10
+steps: 15
 asr: tiny
 train_feature: true
 encoderLN: true
@@ -12,10 +12,10 @@ episodic: true # load pretrained model again for every batch
 temp: 2.5 # temperature scaling
 em_coef: 0.5 # for balancing entropy minimization and minimum class confusion for baseline
 p_ratio: 1
-lr: 1e-4
+lr: 1e-3
 scheduler: null # null or CosineAnnealingLR
 t_max: 10
-lr_min: 2e-5
+lr_min: 1e-3
 ### dataset
 noise_type: null # currently supported: null, AirConditioner_6, AirportAnnouncements_2, Babble_4, CopyMachine_2, Munching_3, Neighbor_6, ShuttingDoor_6, Typing_2
 dataset_name: librispeech

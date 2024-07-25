@@ -5,6 +5,7 @@ import pandas as pd
 import torch
 import torchaudio
 import torch.nn.functional as F
+from torch.cuda.amp import autocast, GradScaler
 from torch import nn
 
 import whisper
@@ -30,6 +31,7 @@ import hydra
 from omegaconf import OmegaConf
 from whisper.normalizers import EnglishTextNormalizer
 from datetime import datetime
+from timeit import default_timer
 
 class MyDecode(whisper.decoding.DecodingTask):
     def _main_loop(self, audio_features, tokens):
@@ -62,61 +64,6 @@ class MyDecode(whisper.decoding.DecodingTask):
             self.inference.cleanup_caching()
 
         return tokens, sum_logprobs, no_speech_probs
-    
-    def AED_suta(self, audio_features, tokens, optimizer, scheduler, args):
-        loss_fn = nn.CrossEntropyLoss()
-        n_batch = tokens.shape[0]
-        sum_logprobs = torch.zeros(n_batch, device=audio_features.device)
-        no_speech_probs = [np.nan] * n_batch
-
-        try:
-            for i in range(self.teacher_forcing_step-3):
-                logits = self.inference.logits(tokens, audio_features) # (1,2,51864)
-                if (
-                    i == 0 and self.tokenizer.no_speech is not None
-                ):  # save no_speech_probs
-                    probs_at_sot = logits[:, self.sot_index].float().softmax(dim=-1)
-                    no_speech_probs = probs_at_sot[:, self.tokenizer.no_speech].tolist()
-
-                # now we need to consider the logits at the last token only
-                logits = logits[:, -1]
-                next_tokens = torch.argmax(logits, dim=-1)
-                # create soft label
-                teacher_token = 50257  # init as eos
-                p_loss = 0
-                if i+4 < self.teacher_forcing_step:
-                    teacher_token = self.ori_generated_ids[0][i+4]
-                if teacher_token == 50257:
-                    pseudo_logit = torch.full((1,logits.shape[1]), 1e-6).to(DEVICE)
-                    pseudo_logit[0][teacher_token] = 1
-                    p_loss = loss_fn(logits, pseudo_logit)
-                
-                topk_logits = torch.topk(logits, k=30).values
-                topk_logits = topk_logits/args.temp
-                e_loss = softmax_entropy(topk_logits, dim=1).mean(0).mean()
-                c_loss = mcc_loss(topk_logits.unsqueeze(0), class_num=args.topk)
-                if teacher_token == 50257:
-                    loss = e_loss * args.em_coef + c_loss * (1 - args.em_coef) + args.p_ratio * p_loss
-                else:
-                    loss = e_loss * args.em_coef + c_loss * (1 - args.em_coef)
-                loss.backward(retain_graph=True)
-                # apply the logit filters, e.g. for suppressing or applying penalty to
-                for logit_filter in self.logit_filters:
-                    logit_filter.apply(logits, tokens)
-
-                # expand the tokens tensor with the selected next tokens
-                tokens, completed = self.decoder.update(tokens, logits, sum_logprobs)
-
-                if completed or tokens.shape[-1] > self.n_ctx:
-                    break
-        finally:
-            self.inference.cleanup_caching()
-        optimizer.step()
-        optimizer.zero_grad()
-        if scheduler is not None:
-            scheduler.step()
-
-        return tokens, sum_logprobs, no_speech_probs, loss, p_loss
     
     @torch.no_grad()
     def run(self, mel):
@@ -161,8 +108,70 @@ class MyDecode(whisper.decoding.DecodingTask):
 
         return tokens, texts
 
+    @torch.autocast(device_type='cuda', dtype=torch.float16)
+    def AED_suta(self, audio_features, tokens, optimizer, scheduler, scaler=None,args=None):
+        loss_fn = nn.CrossEntropyLoss()
+        n_batch = tokens.shape[0]
+        sum_logprobs = torch.zeros(n_batch, device=audio_features.device)
+        no_speech_probs = [np.nan] * n_batch
+        optimizer.zero_grad()
+        loss = 0
+        try:
+            for i in range(self.teacher_forcing_step-3):
+                logits = self.inference.logits(tokens, audio_features) # (1,2,51864)
+                if (
+                    i == 0 and self.tokenizer.no_speech is not None
+                ):  # save no_speech_probs
+                    probs_at_sot = logits[:, self.sot_index].float().softmax(dim=-1)
+                    no_speech_probs = probs_at_sot[:, self.tokenizer.no_speech].tolist()
 
-    def adapt(self, mel, args, optimizer, scheduler=None, generate_text=False):
+                # now we need to consider the logits at the last token only
+                logits = logits[:, -1]
+                next_tokens = torch.argmax(logits, dim=-1)
+                # create soft label
+                teacher_token = 50257  # init as eos
+                p_loss = 0
+                if i+4 < self.teacher_forcing_step:
+                    teacher_token = self.ori_generated_ids[0][i+4]
+                if teacher_token == 50257:
+                    pseudo_logit = torch.full((1,logits.shape[1]), 1e-6).to(DEVICE)
+                    pseudo_logit[0][teacher_token] = 1
+                    p_loss = loss_fn(logits, pseudo_logit)
+                
+                topk_logits = torch.topk(logits, k=30).values
+                topk_logits = topk_logits/args.temp
+                e_loss = softmax_entropy(topk_logits, dim=1).mean(0).mean()
+                c_loss = mcc_loss(topk_logits.unsqueeze(0), class_num=args.topk)
+                if next_tokens == 50257:
+                    break
+                elif teacher_token == 50257:
+                    loss += e_loss * args.em_coef + c_loss * (1 - args.em_coef) + args.p_ratio * p_loss
+                    break
+                else:
+                    loss += e_loss * args.em_coef + c_loss * (1 - args.em_coef)
+                # loss.backward(retain_graph=True)
+                # apply the logit filters, e.g. for suppressing or applying penalty to
+                for logit_filter in self.logit_filters:
+                    logit_filter.apply(logits, tokens)
+
+                # expand the tokens tensor with the selected next tokens
+                tokens, completed = self.decoder.update(tokens, logits, sum_logprobs)
+
+                if completed or tokens.shape[-1] > self.n_ctx:
+                    break
+        finally:
+            with torch.no_grad():
+                self.inference.cleanup_caching()
+        loss.backward()
+        optimizer.step()
+        # optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
+
+        return tokens, sum_logprobs, no_speech_probs, loss, p_loss
+    
+    @torch.autocast(device_type='cuda', dtype=torch.float16)
+    def adapt(self, mel, args, optimizer, scheduler=None, scaler=None, generate_text=False):
         self.decoder.reset()
         n_audio = mel.shape[0]
         
@@ -173,7 +182,7 @@ class MyDecode(whisper.decoding.DecodingTask):
         tokens = tokens.repeat_interleave(self.n_group, dim=0).to(audio_features.device)
 
         # call the main sampling loop
-        tokens, sum_logprobs, no_speech_probs, loss, p_loss = self.AED_suta(audio_features, tokens, optimizer, scheduler, args)
+        tokens, sum_logprobs, no_speech_probs, loss, p_loss = self.AED_suta(audio_features, tokens, optimizer, scheduler, scaler, args)
         # print(tokenizer.decode([50258, 50259, 50359, 50363, 50257]))
         texts = None
         if generate_text:
@@ -217,6 +226,7 @@ def main(args):
                 print(names)
                 
             optimizer, scheduler = setup_optimizer(args, params, args.opt, args.lr, weight_decay=1e-4, scheduler=args.scheduler)
+            scaler = GradScaler()
             decode_obj = MyDecode(model, options)
             # get words before TTA
             with torch.no_grad():
@@ -226,16 +236,15 @@ def main(args):
                 ori_wer = wer(normalized_label, ori_text)
                 wers.append(ori_wer)
                 f.write(f'ori({ori_wer}):{ori_text}\n')
-
             for step in range(args.steps):
                 if step % 3 == 0 or step == args.steps-1:
-                    adapt_text, loss, p_loss = decode_obj.adapt(mel, args, optimizer, scheduler, generate_text=True)
+                    adapt_text, loss, p_loss = decode_obj.adapt(mel, args, optimizer, scheduler, scaler, generate_text=True)
                     adapt_text = normalizer(adapt_text[0])
                     adapt_wer = wer(normalized_label, adapt_text)
                     wers.append(adapt_wer)
                     f.write(f'step{step}({adapt_wer}): {adapt_text}\n')
                 else:
-                    adapt_text, loss, p_loss = decode_obj.adapt(mel, args, optimizer, scheduler)
+                    adapt_text, loss, p_loss = decode_obj.adapt(mel, args, optimizer, scheduler, scaler)
                 step_loss.append(loss)
                 p_loss_list.append(p_loss)
 
