@@ -11,7 +11,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 
 from suta import *
-exp_name = f'./ex_data/suta_s2t_0626test2'
+exp_name = f'./ex_data/suta_whisper0711_test2'
 
 import re
 import numpy as np
