@@ -116,6 +116,8 @@ class MyDecode(whisper.decoding.DecodingTask):
         no_speech_probs = [np.nan] * n_batch
         optimizer.zero_grad()
         loss = 0
+        e_loss_list = []
+        c_loss_list = []
         token_count = 0
         try:
             for i in range(self.teacher_forcing_step-3):
@@ -151,7 +153,8 @@ class MyDecode(whisper.decoding.DecodingTask):
                     break
                 else:
                     loss += e_loss * args.em_coef + c_loss * (1 - args.em_coef)
-                # loss.backward(retain_graph=True)
+                e_loss_list.append(e_loss.item())
+                c_loss_list.append(c_loss.item())
                 # apply the logit filters, e.g. for suppressing or applying penalty to
                 for logit_filter in self.logit_filters:
                     logit_filter.apply(logits, tokens)
@@ -171,7 +174,7 @@ class MyDecode(whisper.decoding.DecodingTask):
         if scheduler is not None:
             scheduler.step()
 
-        return tokens, sum_logprobs, no_speech_probs, loss, p_loss
+        return tokens, loss, e_loss_list, c_loss_list,p_loss
     
     @torch.autocast(device_type='cuda', dtype=torch.float16)
     def adapt(self, mel, args, optimizer, scheduler=None, scaler=None, generate_text=False):
@@ -185,7 +188,7 @@ class MyDecode(whisper.decoding.DecodingTask):
         tokens = tokens.repeat_interleave(self.n_group, dim=0).to(audio_features.device)
 
         # call the main sampling loop
-        tokens, sum_logprobs, no_speech_probs, loss, p_loss = self.AED_suta(audio_features, tokens, optimizer, scheduler, scaler, args)
+        tokens, loss, e_loss_list, c_loss_list, p_loss = self.AED_suta(audio_features, tokens, optimizer, scheduler, scaler, args)
         # print(tokenizer.decode([50258, 50259, 50359, 50363, 50257]))
         texts = None
         if generate_text:
@@ -226,7 +229,14 @@ def main(args):
                 mel = log_mel_spectrogram(pad_or_trim(wavs[0])).unsqueeze(0)
             mel = mel.to(DEVICE)
             if count == 0:
-                print(names)
+                import pprint
+                pprint.pp(names)
+                total_params = sum(
+                    param.numel() for param in model.parameters()
+                )
+                trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+                train_ratio = trainable_params / total_params
+                print(f'train_param ratio: {train_ratio}')
                 
             optimizer, scheduler = setup_optimizer(args, params, args.opt, args.lr, weight_decay=1e-4, scheduler=args.scheduler)
             # scaler = GradScaler()
