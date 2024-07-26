@@ -116,8 +116,10 @@ class MyDecode(whisper.decoding.DecodingTask):
         no_speech_probs = [np.nan] * n_batch
         optimizer.zero_grad()
         loss = 0
+        token_count = 0
         try:
             for i in range(self.teacher_forcing_step-3):
+                token_count += 1
                 logits = self.inference.logits(tokens, audio_features) # (1,2,51864)
                 if (
                     i == 0 and self.tokenizer.no_speech is not None
@@ -162,6 +164,7 @@ class MyDecode(whisper.decoding.DecodingTask):
         finally:
             with torch.no_grad():
                 self.inference.cleanup_caching()
+        loss /= token_count
         loss.backward()
         optimizer.step()
         # optimizer.step()
@@ -226,7 +229,7 @@ def main(args):
                 print(names)
                 
             optimizer, scheduler = setup_optimizer(args, params, args.opt, args.lr, weight_decay=1e-4, scheduler=args.scheduler)
-            scaler = GradScaler()
+            # scaler = GradScaler()
             decode_obj = MyDecode(model, options)
             # get words before TTA
             with torch.no_grad():
@@ -238,13 +241,13 @@ def main(args):
                 f.write(f'ori({ori_wer}):{ori_text}\n')
             for step in range(args.steps):
                 if step % 3 == 0 or step == args.steps-1:
-                    adapt_text, loss, p_loss = decode_obj.adapt(mel, args, optimizer, scheduler, scaler, generate_text=True)
+                    adapt_text, loss, p_loss = decode_obj.adapt(mel, args, optimizer, scheduler, generate_text=True)
                     adapt_text = normalizer(adapt_text[0])
                     adapt_wer = wer(normalized_label, adapt_text)
                     wers.append(adapt_wer)
                     f.write(f'step{step}({adapt_wer}): {adapt_text}\n')
                 else:
-                    adapt_text, loss, p_loss = decode_obj.adapt(mel, args, optimizer, scheduler, scaler)
+                    adapt_text, loss, p_loss = decode_obj.adapt(mel, args, optimizer, scheduler)
                 step_loss.append(loss)
                 p_loss_list.append(p_loss)
 

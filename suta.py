@@ -136,7 +136,7 @@ def SB_collect_params(model, bias_only=False, train_feature=False, train_all=Fal
             
 
     return params, names
-def whisper_collect_params(model, encoderLN, decoderLN, train_feature=False):
+def whisper_collect_params(model, encoderLN, decoderLN, train_feature=False, linear_layer=True):
     # collect trainable params
     params = []
     names = []
@@ -146,6 +146,7 @@ def whisper_collect_params(model, encoderLN, decoderLN, train_feature=False):
 
     for nm, m in model.named_modules():
         trainable = ['weight', 'bias']
+        attr_list = str(nm).split('.')
         # train_LN
         if isinstance(m, nn.LayerNorm):
             if encoderLN:
@@ -165,14 +166,21 @@ def whisper_collect_params(model, encoderLN, decoderLN, train_feature=False):
 
         # train_feature
         if train_feature:
-            if len(str(nm).split('.')) > 1:
-                if str(nm).split('.')[0] == 'encoder' and (str(nm).split('.')[1] == 'conv1' or str(nm).split('.')[1] == 'conv2'):
+            if len(attr_list) > 1:
+                if attr_list[0] == 'encoder' and (attr_list[1] == 'conv1' or attr_list[1] == 'conv2'):
                     for np, p in m.named_parameters():
                         if np == 'bias':
                             p.requires_grad = True
                             params.append(p)
                             names.append(f"{nm}.{np}")
-
+        if linear_layer:
+            if '3' in attr_list and 'mlp' in attr_list and 'decoder' in attr_list:
+                for np, p in m.named_parameters():
+                    if np in trainable:  
+                        p.requires_grad = True
+                        params.append(p)
+                        names.append(f"{nm}.{np}")
+            
         # cross attention bias
         # if 'cross_attn' in nm.split('.'):
         #     if 'query' in nm.split('.') or 'value' in nm.split('.'):
