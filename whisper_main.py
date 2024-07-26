@@ -237,6 +237,7 @@ def main(args):
                 trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
                 train_ratio = trainable_params / total_params
                 print(f'train_param ratio: {train_ratio}')
+                f.write(f'train_param ratio: {train_ratio}\n')
                 
             optimizer, scheduler = setup_optimizer(args, params, args.opt, args.lr, weight_decay=1e-4, scheduler=args.scheduler)
             # scaler = GradScaler()
