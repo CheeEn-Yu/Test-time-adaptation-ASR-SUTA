@@ -1,8 +1,8 @@
-exp_name: ex_data/suta_base_0725
+exp_name: ex_data/suta_base_linear_0726
 topk: 30
 train_params: [feature, LN] # currently supported: all, feature, LN, ...
 steps: 15
-asr: tiny
+asr: base
 train_feature: true
 encoderLN: true
 decoderLN: true
