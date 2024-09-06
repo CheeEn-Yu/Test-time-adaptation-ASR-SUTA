@@ -1,8 +1,6 @@
-import os 
-import gc
+import numpy as np
+import re
 import torch
-import pandas as pd
-from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch import nn
 from jiwer import wer
@@ -136,7 +134,7 @@ def SB_collect_params(model, bias_only=False, train_feature=False, train_all=Fal
             
 
     return params, names
-def whisper_collect_params(model, encoderLN, decoderLN, train_feature=False, linear_layer=True):
+def whisper_collect_params(model, encoderLN, decoderLN, train_feature=False, linear_layer=False, all_encoder=False):
     # collect trainable params
     params = []
     names = []
@@ -148,8 +146,16 @@ def whisper_collect_params(model, encoderLN, decoderLN, train_feature=False, lin
         trainable = ['weight', 'bias']
         attr_list = str(nm).split('.')
         # train_LN
+        if all_encoder:
+            if str(nm).split('.')[0] == 'encoder':
+                for np, p in m.named_parameters():
+                    if np in trainable:  
+                        p.requires_grad = True
+                        params.append(p)
+                        names.append(f"{nm}.{np}")
+
         if isinstance(m, nn.LayerNorm):
-            if encoderLN:
+            if encoderLN and not all_encoder:
                 if str(nm).split('.')[0] == 'encoder':
                     for np, p in m.named_parameters():
                         if np in trainable:  
@@ -173,13 +179,13 @@ def whisper_collect_params(model, encoderLN, decoderLN, train_feature=False, lin
                             p.requires_grad = True
                             params.append(p)
                             names.append(f"{nm}.{np}")
-        if linear_layer:
-            if '3' in attr_list and 'mlp' in attr_list and 'decoder' in attr_list:
-                for np, p in m.named_parameters():
-                    if np in trainable:  
-                        p.requires_grad = True
-                        params.append(p)
-                        names.append(f"{nm}.{np}")
+        # if linear_layer:
+        #     if '3' in attr_list and 'mlp' in attr_list and 'encoder' in attr_list:
+        #         for np, p in m.named_parameters():
+        #             if np in trainable:  
+        #                 p.requires_grad = True
+        #                 params.append(p)
+        #                 names.append(f"{nm}.{np}")
             
         # cross attention bias
         # if 'cross_attn' in nm.split('.'):
@@ -321,242 +327,65 @@ def forward_and_adapt(x, model, optimizer, em_coef=0.9, reweight=False, temp=1.,
 
     return outputs
 
-import argparse
-
-if __name__ == '__main__':
-    SAMPLE_RATE = 16000
-    parser = argparse.ArgumentParser(description="TTA ASR")
-    parser.add_argument('--asr', type=str, default="facebook/wav2vec2-base-960h")
-    parser.add_argument('--steps', type=int, default=40)
-    parser.add_argument('--episodic', action='store_true')
-    parser.add_argument('--div_coef', type=float, default=0.)
-    parser.add_argument('--opt', type=str, default='AdamW')
-    parser.add_argument('--dataset_name', type=str, default='librispeech')
-    parser.add_argument('--dataset_dir', type=str, default='/home/daniel094144/data/LibriSpeech')
-    parser.add_argument('--split', default=['test-other'])
-    parser.add_argument('--lr', type=float, default=1e-4)
-    parser.add_argument('--em_coef', type=float, default=1.)
-    parser.add_argument('--reweight', action='store_true')
-    parser.add_argument('--bias_only', action='store_true')
-    parser.add_argument('--train_feature', action='store_true')
-    parser.add_argument('--train_all', action='store_true')
-    parser.add_argument('--batch_size', type=int, default=1)
-    parser.add_argument('--temp', type=float, default=2.5)
-    parser.add_argument('--non_blank', action='store_true')
-    parser.add_argument('--log_dir', type=str, default='./exps')
-    parser.add_argument('--extra_noise', type=float, default=0.)
-    parser.add_argument('--scheduler', default=None)
-
-    args = parser.parse_args()
-    asr = args.asr
-    steps = args.steps
-    episodic = args.episodic
-    opt = args.opt
-    dataset_dir = args.dataset_dir
-    dataset_name = args.dataset_name
-    split = args.split
-    lr = args.lr
-    em_coef = args.em_coef
-    reweight = args.reweight
-    batch_size = args.batch_size
-    temp =  args.temp
-    non_blank = args.non_blank
-    log_dir = args.log_dir
-    extra_noise = args.extra_noise
-    scheduler = args.scheduler
-    div_coef = args.div_coef
-    bias_only = args.bias_only
-    train_feature = args.train_feature
-    train_all = args.train_all
-    skip_short_thd = None
-    train_LN = True
-
-    exp_name = dataset_name+'_'+str(em_coef)+'_'+str(steps)+'_'+str(temp)+'_'+asr.split('/')[-1]+'_'+'non_blank'+str(non_blank)+'_noise_'+str(extra_noise)+'_rew_'+str(reweight)+'_div_'+str(div_coef)+'_bias_'+str(bias_only)+'_feat_'+str(train_feature)+'_all_'+str(train_all)+'_LN_'+str(train_LN)
-
-    from data import load_dataset
-    dataset = load_dataset(split, dataset_name, dataset_dir, batch_size, extra_noise)
-    transcriptions_1 = []
-    transcriptions_3 = []
-    transcriptions_5 = []
-    transcriptions_10 = []
-    transcriptions_20 = []
-    transcriptions_40 = []
-    gt_texts = []
-    ori_transcriptions = []
-    durations = []
-    werrs = []
-
-    print('------------------------------------')
-    print(f'exp: {exp_name}')
-    print(f'eposidic? {episodic}')
-    print(f'lr = {lr}')
-    print(f'optim = {opt}')
-    print(f'step = {steps}')
-    print(f'em_coef = {em_coef}')
-    print(f'reweight = {reweight}')
-    print(f'batch size = {batch_size}')
-    print(f'temperature = {temp}')
-    print(f'non_blank = {str(non_blank)}')
-    print(f'extra_noise = {extra_noise}')
-    print(f'scheduler = {str(scheduler)}')
-    print(f'div_coef = {str(div_coef)}')
-    print(f'bias_only = {bias_only}')
-    print(f'train_feature = {train_feature}')
-    print(f'train_all = {train_all}')
-    print(f'train_LN = {train_LN}')
-
-    # load model and tokenizer
-    processor = Wav2Vec2Processor.from_pretrained(asr, sampling_rate=SAMPLE_RATE, return_attention_mask=True)
-    model = Wav2Vec2ForCTC.from_pretrained(asr).eval().cuda()        
     
-    # set up for tent
-    model = configure_model(model)
-    params, param_names = collect_params(model, bias_only, train_feature, train_all, train_LN)
-    optimizer, scheduler = setup_optimizer(params, opt, lr, scheduler=scheduler)
+class transcriptionProcessor:
+    def __init__(self):
+        self.data = self._initialize_lists()
 
-    if episodic: 
-        model_state, optimizer_state, scheduler_state = copy_model_and_optimizer(model, optimizer, scheduler)
+    def _initialize_lists(self):
+        return {
+            'ori_wers': [], 'ori_transcription': [], 'labels': [],
+            **{f'wer_{i}': [] for i in [0, 3, 6, 9, 12, 14, 18, 20]},
+            **{f'transcriptions_{i}': [] for i in [0, 3, 6, 9, 12, 14, 18, 20]}
+        }
 
-    
-    print(param_names)
-    count = 0
+    def parse_line(self, line):
+        line = line.strip()
+        try:
+            sentence = line.split(':')[1]
+            match = re.search(r'\((.*?)\)', line.split(':')[0])
+            value = float(match.group(1))
+            return value, sentence
+        except:
+            return None, None
 
-    import time
-    start = time.time()
-    for batch in dataset:
-        lens, wavs, texts, files = batch
-        
-        inputs = processor(wavs, return_tensors="pt", padding="longest")
-        input_values = inputs.input_values.cuda()
-        duration = input_values.shape[1] / SAMPLE_RATE
-        durations.append(duration)
-        
-        if episodic: 
-            model, optimizer, scheduler = load_model_and_optimizer(model, optimizer, model_state, optimizer_state, scheduler_state)
-        
-        # vanilla forward 
-        with torch.no_grad():
-            outputs = model(input_values).logits
-        predicted_ids = torch.argmax(outputs, dim=-1)
-        ori_transcription = processor.batch_decode(predicted_ids)
-        ori_transcriptions += ori_transcription
-        ori_wer = wer(list(texts), list(ori_transcription))
-        print("original WER: ", ori_wer)
+    def process_line(self, line):
+        value, sentence = self.parse_line(line)
+        if value is None:
+            return
 
-        
-        if skip_short_thd is not None: 
-            if outputs.shape[1] <= skip_short_thd:
-                print(f'do not adapt since length is {outputs.shape[1]}')
-                count += 1
-                continue
-        
-        # SUTA
-        for i in range(steps): 
-            outputs = forward_and_adapt(input_values, model, optimizer, em_coef, reweight, temp, non_blank, scheduler, div_coef)
-            if episodic: 
-                if i == 0: 
-                    predicted_ids = torch.argmax(outputs, dim=-1)
-                    transcription = processor.batch_decode(predicted_ids)
-                    ada_wer = wer(list(texts), list(transcription))
-                    print("adapt-1 WER:  ", ada_wer)
-                    # print(texts, transcription)
-                    transcriptions_1 += transcription
+        if line.startswith('ori'):
+            self.data['ori_wers'].append(value)
+            self.data['ori_transcription'].append(sentence)
+        elif line.startswith('label'):
+            self.data['labels'].append(sentence)
+        else:
+            step = re.search(r'step(\d+)', line)
+            if step:
+                step = int(step.group(1))
+                if step in [0, 3, 6, 9, 12, 14, 18, 21]:
+                    key = step
+                    self.data[f'wer_{key}'].append(value)
+                    self.data[f'transcriptions_{key}'].append(sentence)
+                elif step in [24, 27, 30, 33, 36, 39]:
+                    self.data[f'wer_{step}'].append(value)
 
-                if i == 2: 
-                    predicted_ids = torch.argmax(outputs, dim=-1)
-                    transcription = processor.batch_decode(predicted_ids)
-                    ada_wer = wer(list(texts), list(transcription))
-                    print("adapt-3 WER:  ", ada_wer)
-                    # print(texts, transcription)
-                    transcriptions_3 += transcription
+    def process_file(self, file_path):
+        with open(file_path, 'r') as file:
+            for line in file:
+                self.process_line(line)
 
-                if i == 4: 
-                    predicted_ids = torch.argmax(outputs, dim=-1)
-                    transcription = processor.batch_decode(predicted_ids)
-                    ada_wer = wer(list(texts), list(transcription))
-                    print("adapt-5 WER:  ", ada_wer)
-                    # print(texts, transcription)
-                    transcriptions_5 += transcription
+    def step_mean_wer(self):
+        mean_wer_list = [f'ori_wers: {np.array(self.data["ori_wers"]).mean() * 100:.2f}%']
+        for key in [f'wer_{i}' for i in [0, 3, 6, 9, 12, 14, 18, 20]]:
+            try:
+                mean_wer_list.append(f'{key}: {np.array(self.data[key]).mean() * 100:.2f}%')
+            except:
+                pass
+        return mean_wer_list
 
-                if i == 9: 
-                    predicted_ids = torch.argmax(outputs, dim=-1)
-                    transcription = processor.batch_decode(predicted_ids)
-                    ada_wer = wer(list(texts), list(transcription))
-                    print("adapt-10 WER: ", ada_wer)
-                    werr = ori_wer - ada_wer
-                    werrs.append(werr)
-                    # print(texts, transcription)
-                    transcriptions_10 += transcription
-                    
-                if i == 19: 
-                    predicted_ids = torch.argmax(outputs, dim=-1)
-                    transcription = processor.batch_decode(predicted_ids)
-                    ada_wer = wer(list(texts), list(transcription))
-                    print("adapt-20 WER: ", ada_wer)
-                    # print(texts, transcription)
-                    transcriptions_20 += transcription
-
-                if  i == 39: 
-                    predicted_ids = torch.argmax(outputs, dim=-1)
-                    transcription = processor.batch_decode(predicted_ids)
-                    ada_wer = wer(list(texts), list(transcription))
-                    print("adapt-40 WER: ", ada_wer)
-                    # print(texts, transcription)
-                    transcriptions_40 += transcription
-        
-        del input_values
-        torch.cuda.empty_cache()
-        gt_texts += texts
+    def get_data(self):
+        return self.data
 
 
-    print("asr:", asr)
-    print(f'non-adapted count = {count}')
-    print(f'dataset num = {len(dataset)}')
-    print("original WER:", wer(gt_texts, ori_transcriptions))
-    if steps >= 10: 
-        print("TTA-1 WER:", wer(gt_texts, transcriptions_1))
-        print("TTA-3 WER:", wer(gt_texts, transcriptions_3))
-        print("TTA-5 WER:", wer(gt_texts, transcriptions_5))
-        print("TTA-10 WER:", wer(gt_texts, transcriptions_10))
-    if steps >= 20: 
-        print("TTA-20 WER:", wer(gt_texts, transcriptions_20))
-    if steps >= 40:
-        print("TTA-40 WER:", wer(gt_texts, transcriptions_40))
-    print('------------------------------------')
 
-
-    if not os.path.exists(log_dir):
-        os.mkdir(log_dir)
-
-    with open(os.path.join(log_dir, exp_name), 'w') as f: 
-        f.write(f"original WER: {wer(gt_texts, ori_transcriptions)}\n")
-        if steps >= 10: 
-            f.write(f"TTA-1 WER: {wer(gt_texts, transcriptions_1)}\n")
-            f.write(f"TTA-3 WER: {wer(gt_texts, transcriptions_3)}\n")
-            f.write(f"TTA-5 WER: {wer(gt_texts, transcriptions_5)}\n")
-            f.write(f"TTA-10 WER: {wer(gt_texts, transcriptions_10)}\n")
-        if steps >= 20:
-            f.write(f"TTA-20 WER: {wer(gt_texts, transcriptions_20)}\n")
-        if steps >= 40:
-            f.write(f"TTA-40 WER: {wer(gt_texts, transcriptions_40)}\n")
-        f.write(f'eposidic? {episodic}\n')
-        f.write(f'lr = {lr}\n')
-        f.write(f'optim = {opt}\n')
-        f.write(f'step = {steps}\n')
-        f.write(f'em_coef = {em_coef}\n')
-        f.write(f'reweight = {reweight}\n')
-        f.write(f'batch size = {batch_size}\n')
-        f.write(f'temperature = {temp}\n')
-        f.write(f'non_blank = {str(non_blank)}\n')
-        f.write(f'extra_noise = {extra_noise}\n')
-        f.write(f'scheduler = {str(scheduler)}\n')
-        f.write(f'div_coef = {str(div_coef)}\n')
-        f.write(f'bias_only = {str(bias_only)}\n')
-        f.write(f'train_feature = {str(train_feature)}\n')
-        f.write(f'train_all = {str(train_all)}\n')
-        f.write(f'train_LN = {str(train_LN)}\n')
-    
-    csv_path = os.path.join(log_dir, exp_name+'.csv')
-    df = pd.DataFrame({'duration': durations, 'WERR': werrs})
-    df.to_csv(csv_path)
-    
