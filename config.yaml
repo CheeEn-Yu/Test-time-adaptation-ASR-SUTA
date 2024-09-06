@@ -1,17 +1,20 @@
-exp_name: ex_data/suta_base_linear_0726
+exp_name: ex_data/test_time
 topk: 30
 train_params: [feature, LN] # currently supported: all, feature, LN, ...
-steps: 15
-asr: base
+objective_f: [e_loss]     # [e_loss, c_loss, p_loss]
+steps: 10
+asr: tiny
 train_feature: true
 encoderLN: true
 decoderLN: true
+allEncoder: false
+repeat_penal: false
 ### optimizer & train hyparameters & learning rate scheduler
 opt: AdamW
 episodic: true # load pretrained model again for every batch
-temp: 2.5 # temperature scaling
+temp: 4.5 # temperature scaling
 em_coef: 0.5 # for balancing entropy minimization and minimum class confusion for baseline
-p_ratio: 1
+p_ratio: 1.0
 lr: 1e-3
 scheduler: null # null or CosineAnnealingLR
 t_max: 10
