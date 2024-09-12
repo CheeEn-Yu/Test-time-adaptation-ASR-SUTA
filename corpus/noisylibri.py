@@ -21,7 +21,7 @@ class noisyLibriDataset(Dataset):
         self.path = path
         self.bucket_size = bucket_size
         # List all wave files
-        self.file_list = list(Path(path).rglob("*.flac"))
+        self.file_list = list(Path(path).rglob("*.wav"))
         texts = read_text(f'{path}/label.txt')
         self.text = [texts[sentence.name.split('.')[0]] for sentence in self.file_list]
         self.texts = []
