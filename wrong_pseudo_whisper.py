@@ -222,8 +222,6 @@ def main(args):
     p_loss_list = []
     with open(f'{args.exp_name}/result.txt', 'a') as f:
         for count, batch in tqdm(enumerate(dataset)):
-            if count > 300:
-                break
             model = whisper.load_model(args.asr).to(DEVICE)
             params, names = whisper_collect_params(model, args.encoderLN, args.decoderLN, train_feature=args.train_feature)
             options = whisper.DecodingOptions(language="en", without_timestamps=True)

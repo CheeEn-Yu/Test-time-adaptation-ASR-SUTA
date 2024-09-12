@@ -69,7 +69,7 @@ def main(cfg):
 
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--cfg", default="../conf/noisyspeech_synthesizer.cfg", help="Read noisyspeech_synthesizer.cfg for all the details")
+    parser.add_argument("--cfg", default="./noisyspeech_synthesizer.cfg", help="Read noisyspeech_synthesizer.cfg for all the details")
     parser.add_argument("--cfg_str", type=str, default="noisy_speech")
     args = parser.parse_args()
 
