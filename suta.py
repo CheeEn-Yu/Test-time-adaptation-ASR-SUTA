@@ -1,6 +1,9 @@
 import numpy as np
 import re
+import numpy as np
+import re
 import torch
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch import nn
 from jiwer import wer
@@ -131,7 +134,7 @@ class TTADecode(whisper.decoding.DecodingTask):
 
                 if "p_loss" in args.objective_f:
                     if teacher_token == 50257 or next_tokens == 50257:
-                        pseudo_logit = torch.full((1,logits.shape[1]), 1e-6).to(DEVICE) # create soft label
+                        pseudo_logit = torch.full((1,logits.shape[1]), 1e-6).to(args.device) # create soft label
                         pseudo_logit[0][teacher_token] = 1
                         p_loss = loss_fn(logits, pseudo_logit)
                         loss += p_loss
@@ -206,6 +209,9 @@ def setup_optimizer(args, params, opt_name='AdamW', lr=1e-4, beta=0.9, weight_de
     if verbose:
         print(f'[INFO]    optimizer: {opt}')
         print(f'[INFO]    scheduler: {scheduler}')
+    if verbose:
+        print(f'[INFO]    optimizer: {opt}')
+        print(f'[INFO]    scheduler: {scheduler}')
     if opt_name == 'Adam':       
         optimizer = opt(params,
                 lr=lr,
@@ -215,6 +221,7 @@ def setup_optimizer(args, params, opt_name='AdamW', lr=1e-4, beta=0.9, weight_de
         optimizer = opt(params, lr=lr, weight_decay=weight_decay)
     
     if scheduler is not None: 
+        return optimizer, eval(scheduler)(optimizer, T_max=args.t_max, eta_min=args.lr_min)
         return optimizer, eval(scheduler)(optimizer, T_max=args.t_max, eta_min=args.lr_min)
     else: 
         return optimizer, None
@@ -275,6 +282,25 @@ def HF_collect_params(args, model):
     return names, params
 
 def SB_collect_params(model, bias_only=False, train_feature=False, train_all=False, train_LN=True):
+def HF_collect_params(args, model):
+    model.requires_grad_(False)
+    params = []
+    names = []
+    for name, param in model.named_parameters():
+        if 'feature' in args.train_params:
+            if 'conv' in str(name).split('.'):
+                param.requires_grad = True
+                params.append(param)
+                names.append(f"{name}")
+        if 'LN' in args.train_params:
+            if 'self_attn_layer_norm' in str(name).split('.'):
+                param.requires_grad = True
+                params.append(param)
+                names.append(f"{name}")
+
+    return names, params
+
+def SB_collect_params(model, bias_only=False, train_feature=False, train_all=False, train_LN=True):
     """Collect the affine scale + shift parameters from batch norms.
 
     Walk the model's modules and collect all batch normalization parameters.
@@ -316,15 +342,18 @@ def SB_collect_params(model, bias_only=False, train_feature=False, train_all=Fal
 
     return params, names
 def whisper_collect_params(model, encoderLN, decoderLN, train_feature=False, linear_layer=False, all_encoder=False):
+def whisper_collect_params(model, encoderLN, decoderLN, train_feature=False, linear_layer=False, all_encoder=False):
     # collect trainable params
     params = []
     names = []
 
     for param in model.parameters():
+    for param in model.parameters():
         param.requires_grad = False
 
     for nm, m in model.named_modules():
         trainable = ['weight', 'bias']
+        attr_list = str(nm).split('.')
         attr_list = str(nm).split('.')
         # train_LN
         if all_encoder:
@@ -335,7 +364,16 @@ def whisper_collect_params(model, encoderLN, decoderLN, train_feature=False, lin
                         params.append(p)
                         names.append(f"{nm}.{np}")
 
+        if all_encoder:
+            if str(nm).split('.')[0] == 'encoder':
+                for np, p in m.named_parameters():
+                    if np in trainable:  
+                        p.requires_grad = True
+                        params.append(p)
+                        names.append(f"{nm}.{np}")
+
         if isinstance(m, nn.LayerNorm):
+            if encoderLN and not all_encoder:
             if encoderLN and not all_encoder:
                 if str(nm).split('.')[0] == 'encoder':
                     for np, p in m.named_parameters():
@@ -350,12 +388,39 @@ def whisper_collect_params(model, encoderLN, decoderLN, train_feature=False, lin
                             p.requires_grad = True
                             params.append(p)
                             names.append(f"{nm}.{np}")
+                    for np, p in m.named_parameters():
+                        if np in trainable:  
+                            p.requires_grad = True
+                            params.append(p)
+                            names.append(f"{nm}.{np}")
 
         # train_feature
         if train_feature:
             if len(attr_list) > 1:
                 if attr_list[0] == 'encoder' and (attr_list[1] == 'conv1' or attr_list[1] == 'conv2'):
+            if len(attr_list) > 1:
+                if attr_list[0] == 'encoder' and (attr_list[1] == 'conv1' or attr_list[1] == 'conv2'):
                     for np, p in m.named_parameters():
+                        if np == 'bias':
+                            p.requires_grad = True
+                            params.append(p)
+                            names.append(f"{nm}.{np}")
+        # if linear_layer:
+        #     if '3' in attr_list and 'mlp' in attr_list and 'encoder' in attr_list:
+        #         for np, p in m.named_parameters():
+        #             if np in trainable:  
+        #                 p.requires_grad = True
+        #                 params.append(p)
+        #                 names.append(f"{nm}.{np}")
+            
+        # cross attention bias
+        # if 'cross_attn' in nm.split('.'):
+        #     if 'query' in nm.split('.') or 'value' in nm.split('.'):
+        #         for np, p in m.named_parameters():
+        #             if np in trainable and np == 'bias':
+        #                 p.requires_grad = True
+        #                 params.append(p)
+        #                 names.append(f"{nm}.{np}")
                         if np == 'bias':
                             p.requires_grad = True
                             params.append(p)
@@ -507,6 +572,68 @@ def forward_and_adapt(x, model, optimizer, em_coef=0.9, reweight=False, temp=1.,
                 outputs = model.decode(x, options)
 
     return outputs
+
+    
+class transcriptionProcessor:
+    def __init__(self):
+        self.data = self._initialize_lists()
+
+    def _initialize_lists(self):
+        return {
+            'ori_wers': [], 'ori_transcription': [], 'labels': [],
+            **{f'wer_{i}': [] for i in [0, 3, 6, 9, 12, 14, 18, 20]},
+            **{f'transcriptions_{i}': [] for i in [0, 3, 6, 9, 12, 14, 18, 20]}
+        }
+
+    def parse_line(self, line):
+        line = line.strip()
+        try:
+            sentence = line.split(':')[1]
+            match = re.search(r'\((.*?)\)', line.split(':')[0])
+            value = float(match.group(1))
+            return value, sentence
+        except:
+            return None, None
+
+    def process_line(self, line):
+        value, sentence = self.parse_line(line)
+        if value is None:
+            return
+
+        if line.startswith('ori'):
+            self.data['ori_wers'].append(value)
+            self.data['ori_transcription'].append(sentence)
+        elif line.startswith('label'):
+            self.data['labels'].append(sentence)
+        else:
+            step = re.search(r'step(\d+)', line)
+            if step:
+                step = int(step.group(1))
+                if step in [0, 3, 6, 9, 12, 14, 18, 21]:
+                    key = step
+                    self.data[f'wer_{key}'].append(value)
+                    self.data[f'transcriptions_{key}'].append(sentence)
+                elif step in [24, 27, 30, 33, 36, 39]:
+                    self.data[f'wer_{step}'].append(value)
+
+    def process_file(self, file_path):
+        with open(file_path, 'r') as file:
+            for line in file:
+                self.process_line(line)
+
+    def step_mean_wer(self):
+        mean_wer_list = [f'ori_wers: {np.array(self.data["ori_wers"]).mean() * 100:.2f}%']
+        for key in [f'wer_{i}' for i in [0, 3, 6, 9, 12, 14, 18, 20]]:
+            try:
+                mean_wer_list.append(f'{key}: {np.array(self.data[key]).mean() * 100:.2f}%')
+            except:
+                pass
+        return mean_wer_list
+
+    def get_data(self):
+        return self.data
+
+
 
     
 class transcriptionProcessor:

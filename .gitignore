@@ -3,7 +3,14 @@ __pycache__
 ex_data/
 /LibriSpeech
 test*
+test*
 /aishell_test
+/noisy_testset_wav
+/testset_txt
+/pretrained_models
+/model
+/outputs
+data/
 /noisy_testset_wav
 /testset_txt
 /pretrained_models
