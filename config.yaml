@@ -1,0 +1,36 @@
+exp_name: ex_data/0921_wo_c
+topk: 30
+alpha: 10 # the power of weighted, larger => higher entropy token accounts more
+train_params: [feature, LN] # currently supported: feature -> CNN bias, LN (both encoder and decoder), ...
+objective_f: [e_loss, weighted]     # [e_loss, c_loss, p_loss, weighted, ada_teacher_token]
+steps: 10
+asr: tiny
+train_feature: true
+encoderLN: true
+decoderLN: true
+allEncoder: false
+repeat_penal: false
+max_decoder_step: 128
+num_data: False # False represent all data, set num_data for rapid test
+### optimizer & train hyparameters & learning rate scheduler
+opt: AdamW
+episodic: true # load pretrained model again for every batch
+temp: 4.5 # temperature scaling
+em_coef: 0.5 # for balancing entropy minimization and minimum class confusion for baseline
+p_ratio: 1.0
+lr: 1e-3
+scheduler: null # null or CosineAnnealingLR
+t_max: 10
+lr_min: 1e-3
+### dataset
+noise_type: null # currently supported: null, AirConditioner_6, AirportAnnouncements_2, Babble_4, CopyMachine_2, Munching_3, Neighbor_6, ShuttingDoor_6, Typing_2
+dataset_name: noisylibri
+dataset_dir: ../TTA_LAS/test
+
+extra_noise: 0.00
+noise_snr: 10
+sample_rate: 16000
+batch_size: 1
+
+### seed for reproductivity
+seed: 42

@@ -19,21 +19,27 @@ def read_text(file):
 
 
 class LibriDataset(Dataset):
-    def __init__(self, split, bucket_size, path, ascending=False):
+    def __init__(self, bucket_size, path, noise_type=None, noise_snr=None, ascending=False):
         # Setup
         self.path = path
         self.bucket_size = bucket_size
         split = ['test-other']
+
         # List all wave files
         file_list = []
         for s in split: 
             split_list = list(Path(os.path.join(path, s)).rglob("*.flac"))
             file_list += split_list
-        
+        file_list.sort()
+
         text = []
         for f in tqdm(file_list, desc='Read text'):
             transcription = read_text(str(f))
             text.append(transcription)
+
+        if noise_type:
+            snr_string = f"_{noise_snr}.0" if noise_snr in [0, -10] else ""
+            file_list = sorted(list(Path(os.path.join(path, f"../data/libri_test_noise{snr_string}/{noise_type}")).rglob("*.wav")))
 
         self.file_list, self.text = zip(*[(f_name, txt)
                                           for f_name, txt in sorted(zip(file_list, text), reverse=not ascending, key=lambda x:len(x[1]))])

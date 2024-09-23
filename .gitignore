@@ -1,6 +1,5 @@
 __pycache__
 *.csv
-*.wav
 ex_data/
 /LibriSpeech
 test*

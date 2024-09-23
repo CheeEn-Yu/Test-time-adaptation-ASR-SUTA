@@ -4,6 +4,187 @@ import torch
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch import nn
 from jiwer import wer
+import whisper
+
+class TTADecode(whisper.decoding.DecodingTask):
+
+    def _main_loop(self, audio_features, tokens, max_decoder_step=128):
+        '''
+        Original Whisper autoregressive decode
+        '''
+        n_batch = tokens.shape[0]
+        sum_logprobs = torch.zeros(n_batch, device=audio_features.device)
+        no_speech_probs = [np.nan] * n_batch
+
+        try:
+            for i in range(max_decoder_step):
+                logits = self.inference.logits(tokens, audio_features) # (1,2,51864)
+                if (
+                    i == 0 and self.tokenizer.no_speech is not None
+                ):  # save no_speech_probs
+                    probs_at_sot = logits[:, self.sot_index].float().softmax(dim=-1)
+                    no_speech_probs = probs_at_sot[:, self.tokenizer.no_speech].tolist()
+
+                # now we need to consider the logits at the last token only
+                logits = logits[:, -1]
+
+                # apply the logit filters, e.g. for suppressing or applying penalty to
+                for logit_filter in self.logit_filters:
+                    logit_filter.apply(logits, tokens)
+
+                # expand the tokens tensor with the selected next tokens
+                tokens, completed = self.decoder.update(tokens, logits, sum_logprobs)
+
+                if completed or tokens.shape[-1] > self.n_ctx:
+                    break
+        finally:
+            self.inference.cleanup_caching()
+
+        return tokens, sum_logprobs, no_speech_probs
+    
+    @torch.no_grad()
+    def run(self, mel, max_decoder_step=128):
+        '''
+        Original Whisper decode. Always run this first before use AED_suta
+        '''
+        self.decoder.reset()
+        tokenizer = self.tokenizer
+        n_audio = mel.shape[0]
+
+        audio_features = self._get_audio_features(mel)  # encoder forward pass
+        tokens = torch.tensor([self.initial_tokens]).repeat(n_audio, 1)
+
+        # repeat text tensors by the group size, for beam search or best-of-n sampling
+        tokens = tokens.repeat_interleave(self.n_group, dim=0).to(audio_features.device)
+
+        # call the main sampling loop
+        tokens, sum_logprobs, no_speech_probs = self._main_loop(audio_features, tokens, max_decoder_step)
+
+        # Save teacher token and the length of original recognized sentence
+        try:
+            self.ori_generated_ids
+            self.teacher_forcing_step
+        except:
+            self.ori_generated_ids = tokens
+            self.teacher_forcing_step = tokens.shape[1]
+
+        # reshape the tensors to have (n_audio, n_group) as the first two dimensions
+        audio_features = audio_features[:: self.n_group]
+        no_speech_probs = no_speech_probs[:: self.n_group]
+        assert audio_features.shape[0] == len(no_speech_probs) == n_audio
+
+        tokens = tokens.reshape(n_audio, self.n_group, -1)
+        sum_logprobs = sum_logprobs.reshape(n_audio, self.n_group)
+
+        # get the final candidates for each group, and slice between the first sampled token and EOT
+        tokens, sum_logprobs = self.decoder.finalize(tokens, sum_logprobs)
+        tokens = [
+            [t[self.sample_begin : (t == tokenizer.eot).nonzero()[0, 0]] for t in s]
+            for s in tokens
+        ]
+
+        # select the top-ranked sample in each group
+        selected = self.sequence_ranker.rank(tokens, sum_logprobs)
+        tokens = [t[i].tolist() for i, t in zip(selected, tokens)]
+        texts = [tokenizer.decode(t).strip() for t in tokens]
+
+        return tokens, texts
+
+    def AED_suta(self, audio_features, tokens, optimizer, scheduler, args=None):
+        loss_fn = nn.CrossEntropyLoss()
+        n_batch = tokens.shape[0]
+        sum_logprobs = torch.zeros(n_batch, device=audio_features.device)
+        no_speech_probs = [np.nan] * n_batch
+        optimizer.zero_grad()
+        loss = 0
+        c_loss = 0
+        p_loss = 0
+        e_loss_list = []
+        p_loss_list = []
+        token_count = 0
+        try:
+            for i in range(self.teacher_forcing_step-3):
+                token_count += 1
+                logits = self.inference.logits(tokens, audio_features) # (1,2,51864)
+                if (
+                    i == 0 and self.tokenizer.no_speech is not None
+                ):  # save no_speech_probs
+                    probs_at_sot = logits[:, self.sot_index].float().softmax(dim=-1)
+                    no_speech_probs = probs_at_sot[:, self.tokenizer.no_speech].tolist()
+
+                # now we need to consider the logits at the last token only
+                logits = logits[:, -1]
+                next_tokens = torch.argmax(logits, dim=-1)
+                topk_logits = torch.topk(logits, k=args.topk).values
+                topk_logits = topk_logits/args.temp
+                if "c_loss" in args.objective_f:
+                    try:
+                        logits_list = torch.cat((logits_list, topk_logits), dim=0)
+                    except:
+                        logits_list = topk_logits
+
+                teacher_token = 50257  # init as eos
+                if i+4 < self.teacher_forcing_step:
+                    teacher_token = self.ori_generated_ids[0][i+4]
+                e_loss = softmax_entropy(topk_logits, dim=1).mean(0).mean()
+                loss += (1/(1+args.alpha*torch.exp(-e_loss))) * e_loss if "weighted" in args.objective_f else e_loss
+
+                if "p_loss" in args.objective_f:
+                    if teacher_token == 50257 or next_tokens == 50257:
+                        pseudo_logit = torch.full((1,logits.shape[1]), 1e-6).to(DEVICE) # create soft label
+                        pseudo_logit[0][teacher_token] = 1
+                        p_loss = loss_fn(logits, pseudo_logit)
+                        loss += p_loss
+
+                try:
+                    p_loss_list.append(p_loss)
+                except:
+                    p_loss_list.append(p_loss.item())
+                e_loss_list.append(e_loss.item())
+                             
+                # apply the logit filters, e.g. for suppressing or applying penalty to
+                for logit_filter in self.logit_filters:
+                    logit_filter.apply(logits, tokens)
+
+                # expand the tokens tensor with the selected next tokens
+                tokens, completed = self.decoder.update(tokens, logits, sum_logprobs)
+
+                if completed or tokens.shape[-1] > self.n_ctx:
+                    break
+        finally:
+            with torch.no_grad():
+                self.inference.cleanup_caching()
+        loss /= token_count
+        if 'c_loss' in args.objective_f:
+            c_loss = mcc_loss(logits_list.unsqueeze(0), class_num=args.topk)
+            loss = loss * args.em_coef + c_loss * (1 - args.em_coef)
+
+        loss.backward()
+        optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
+        return tokens, loss, e_loss_list, c_loss, p_loss
+    
+    @torch.autocast(device_type='cuda', dtype=torch.float16)
+    def adapt(self, mel, args, optimizer, scheduler=None, scaler=None, generate_text=False):
+        self.decoder.reset()
+        n_audio = mel.shape[0]
+        
+        audio_features = self._get_audio_features(mel)  # encoder forward pass
+        tokens = torch.tensor([self.initial_tokens]).repeat(n_audio, 1)
+
+        # repeat text tensors by the group size, for beam search or best-of-n sampling
+        tokens = tokens.repeat_interleave(self.n_group, dim=0).to(audio_features.device)
+
+        # call the main sampling loop
+        tokens, loss, e_loss_list, c_loss, p_loss = self.AED_suta(audio_features, tokens, optimizer, scheduler, args)
+        # can check the decoded tokens by: print(tokenizer.decode([50258, 50259, 50359, 50363, 50257]))
+        texts = None
+        if generate_text:
+            _, texts = self.run(mel)
+        if not isinstance(p_loss, int):
+            p_loss = p_loss.item()
+        return texts, loss.item(), p_loss
 
 def my_greedy_decode(model, input_features, max_step):
     # greedy decode for pseudo label
