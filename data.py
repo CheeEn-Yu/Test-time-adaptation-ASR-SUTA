@@ -3,6 +3,7 @@ torch.manual_seed(0)
 import torchaudio
 from functools import partial
 from torch.utils.data import DataLoader
+from datasets import load_dataset
 
 SAMPLE_RATE = 16000
 
@@ -45,7 +46,7 @@ def collect_audio_batch(batch, extra_noise=0., maxLen=600000):
     return audio_len, audio_feat, text, file
 
 
-def create_dataset(split, name, path, batch_size=1):
+def create_dataset(split, name, path, batch_size=1, **kwargs):
     ''' Interface for creating all kinds of dataset'''
 
     # Recognize corpus
@@ -67,6 +68,8 @@ def create_dataset(split, name, path, batch_size=1):
         from corpus.voicebank import VoicebankDataset as Dataset
     elif name.lower() == "noisy":
         from corpus.noisylibri import noisyLibriDataset as Dataset
+    elif name.lower() == "multilibri":
+        from corpus.multilibri import multiLingualLibriDataset as Dataset
         
     else:
         raise NotImplementedError
@@ -78,10 +81,12 @@ def create_dataset(split, name, path, batch_size=1):
     return dataset, loader_bs
 
 
-def load_dataset(split=None, name='librispeech', path=None, batch_size=1, extra_noise=0., num_workers=4):
+def load_SUTAdataset(split=None, name='librispeech', path=None, batch_size=1, extra_noise=0., num_workers=4):
     ''' Prepare dataloader for training/validation'''
     dataset, loader_bs = create_dataset(split, name, path, batch_size)
-    collate_fn = partial(collect_audio_batch, extra_noise=extra_noise)
+    collate_fn = None
+    if name.lower() != 'multilibri':
+        collate_fn = partial(collect_audio_batch, extra_noise=extra_noise)
 
     dataloader = DataLoader(dataset, batch_size=loader_bs, shuffle=False,
                             collate_fn=collate_fn, num_workers=num_workers)
