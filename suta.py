@@ -37,7 +37,7 @@ class TTADecode(whisper.decoding.DecodingTask):
     @torch.no_grad()
     def run(self, mel, max_decoder_step=128):
         '''
-        Original Whisper decode. Always run this first before use AED_suta
+        Original Whisper decode. Always run this first before use AED_suta for saving teacher token.
         '''
         self.decoder.reset()
         tokenizer = self.tokenizer
@@ -72,6 +72,7 @@ class TTADecode(whisper.decoding.DecodingTask):
         tokens = [t[i].tolist() for i, t in zip(selected, tokens)]
         texts = [tokenizer.decode(t).strip() for t in tokens]
         return tokens, texts
+    
     def AED_suta(self, audio_features, tokens, optimizer, scheduler, args=None):
         loss_fn = nn.CrossEntropyLoss()
         n_batch = tokens.shape[0]

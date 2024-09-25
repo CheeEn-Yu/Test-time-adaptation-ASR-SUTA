@@ -57,7 +57,10 @@ def main(args):
             if args.asr == 'large' or args.asr == 'large_v2' or args.asr == 'large_v3':
                 mel = log_mel_spectrogram(pad_or_trim(wavs[0]), n_mels=128).unsqueeze(0)
             else:
-                mel = log_mel_spectrogram(pad_or_trim(wavs[0].float())).unsqueeze(0)
+                if args.dataset_name.lower() == "multilibri":
+                    mel = log_mel_spectrogram(pad_or_trim(wavs[0].float())).unsqueeze(0)
+                else:
+                    mel = log_mel_spectrogram(pad_or_trim(wavs[0])).unsqueeze(0)
             mel = mel.to(DEVICE)
             if count == 0:
                 import pprint
@@ -79,7 +82,7 @@ def main(args):
             with torch.no_grad():
                 _, ori_text = decode_obj.run(mel, max_decoder_step=args.max_decoder_step)
                 label = normalizer(texts[0]) if args.lang == "en" else texts[0]
-                ori_text = normalizer(ori_text[0]) if args.lang == "en" else texts[0]
+                ori_text = normalizer(ori_text[0]) if args.lang == "en" else ori_text[0]
                 ori_wer = wer(label, ori_text)
                 wers.append(ori_wer)
                 f.write(f'ori({ori_wer}):{ori_text}\n')

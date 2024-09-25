@@ -27,7 +27,7 @@ def main(args):
     normalizer = EnglishTextNormalizer()
     processor = Speech2TextProcessor.from_pretrained("facebook/s2t-large-librispeech-asr")
     feature_extractor = AutoFeatureExtractor.from_pretrained("facebook/s2t-small-librispeech-asr")
-    dataset = load_dataset(name='noisy', path=args.dataset_dir, batch_size=1)
+    dataset = load_SUTAdataset(name='noisy', path=args.dataset_dir, batch_size=1)
     os.makedirs(args.exp_name, exist_ok=True)
     os.makedirs(f'{args.exp_name}/figs', exist_ok=True)
     config_str = OmegaConf.to_yaml(args)
