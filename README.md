@@ -4,6 +4,7 @@
 The installation is as follow command:
 ```
 conda create -n tta python=3.10
+conda activate tta
 sudo apt update && sudo apt install ffmpeg
 pip install -U openai-whisper
 pip install -r requirements.txt
