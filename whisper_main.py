@@ -29,7 +29,7 @@ def main(args):
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     normalizer = EnglishTextNormalizer()
     
-    dataset = load_SUTAdataset(name=args.dataset_name, path=args.dataset_dir, batch_size=1)
+    dataset = load_SUTAdataset(name=args.dataset_name, path=args.dataset_dir, batch_size=1, noise_dir=args.noise_dir, snr=args.snr)
     os.makedirs(args.exp_name, exist_ok=True)
     os.makedirs(f'{args.exp_name}/figs', exist_ok=True)
     config_str = OmegaConf.to_yaml(args)

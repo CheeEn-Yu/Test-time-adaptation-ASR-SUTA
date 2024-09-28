@@ -48,6 +48,7 @@ def collect_audio_batch(batch, extra_noise=0., maxLen=600000):
 
 def create_dataset(split, name, path, batch_size=1, **kwargs):
     ''' Interface for creating all kinds of dataset'''
+    loader_bs = batch_size
 
     # Recognize corpus
     if name.lower() == "librispeech":
@@ -66,24 +67,26 @@ def create_dataset(split, name, path, batch_size=1, **kwargs):
         from corpus.aishell3 import AIShellDataset as Dataset
     elif name.lower() == "voicebank":
         from corpus.voicebank import VoicebankDataset as Dataset
-    elif name.lower() == "noisy":
+    elif name.lower() == "noisylibri":
         from corpus.noisylibri import noisyLibriDataset as Dataset
     elif name.lower() == "multilibri":
         from corpus.multilibri import multiLingualLibriDataset as Dataset
+        dataset = Dataset(split, batch_size, path, kwargs["noise_dir"], kwargs["snr"])
+        print(f'[INFO]    There are {len(dataset)} samples.')
+        return dataset, loader_bs
         
     else:
         raise NotImplementedError
 
-    loader_bs = batch_size
     dataset = Dataset(split, batch_size, path)
     print(f'[INFO]    There are {len(dataset)} samples.')
 
     return dataset, loader_bs
 
 
-def load_SUTAdataset(split=None, name='librispeech', path=None, batch_size=1, extra_noise=0., num_workers=4):
+def load_SUTAdataset(split=None, name='librispeech', path=None, batch_size=1, extra_noise=0., num_workers=4, noise_dir=None, snr=0.):
     ''' Prepare dataloader for training/validation'''
-    dataset, loader_bs = create_dataset(split, name, path, batch_size)
+    dataset, loader_bs = create_dataset(split, name, path, batch_size, noise_dir=noise_dir, snr=snr)
     collate_fn = None
     if name.lower() != 'multilibri':
         collate_fn = partial(collect_audio_batch, extra_noise=extra_noise)

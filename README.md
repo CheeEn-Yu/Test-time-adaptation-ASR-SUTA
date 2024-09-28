@@ -13,7 +13,15 @@ pip install -r requirements.txt
 
 ## Run the Experiment
 
-change the config.yaml first (There are more detail in config.yaml comment)
+Now, this code support librispeech, multilingual librispeech dataset only.   
+If run librispeech dataset, config the corpus/noisyspeech_synthesizer.cfg first  
+then generate the noise dataset with corpus/noisyspeech_synthesizer.py  
+Set `random_noise` in corpus/noisyspeech_synthesizer.cfg to switch all categories of noise into clean dataset or add each category of noise into clean dataset separately.  
+```
+python corpus/noisyspeech_synthesizer.py
+```
+
+Change the config.yaml first (There are more details in config.yaml comment)
 
 ```
 python whisper_main.py exp_name="<EXP_NAME>"
@@ -26,7 +34,7 @@ ex_data/<EXP_NAME>-
       |- result.txt
       |- log.txt  
 ```
-
+**In the log.txt, it would record the WER of each 3 steps.**
 
 main.py is for facebook/s2t-small-librispeech-asr
 

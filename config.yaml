@@ -23,8 +23,9 @@ scheduler: null # null or CosineAnnealingLR
 t_max: 10
 lr_min: 1e-3
 ### dataset
-noise_type: null # currently supported: null, AirConditioner_6, AirportAnnouncements_2, Babble_4, CopyMachine_2, Munching_3, Neighbor_6, ShuttingDoor_6, Typing_2
-dataset_name: multilibri
+noise_dir: ./res # only for multilibri, currently supported: null, ../res 
+snr: 10 # only for multilibri
+dataset_name: multilibri  # ['librispeech', 'noisylibri', 'multilibri'] for self-define noisy Librispeech (English only), use noisylibri
 dataset_dir: dutch  # for multi librispeech dataset, this is lang: ['dutch', 'french', 'german', 'italian', 'polish', 'portuguese', 'spanish']
 lang: nl  # ['nl', 'fr', 'de', 'it', 'pl', 'pt', 'es'], reference: https://github.com/openai/whisper/blob/main/whisper/tokenizer.py
 batch_size: 1
