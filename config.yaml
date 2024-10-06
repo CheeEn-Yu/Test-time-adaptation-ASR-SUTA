@@ -3,7 +3,7 @@ task: translation # ["transcribe", "translation"]
 topk: 30  # the dimension be calculated entropy
 alpha: 10 # the power of weighted, larger => higher entropy token accounts more
 train_params: [feature, LN] # currently supported: feature -> CNN bias, LN (both encoder and decoder), ...
-objective_f: [e_loss, weighted]     # [e_loss, c_loss, p_loss, weighted]
+objective_f: [e_loss, weighted, p_loss]     # [e_loss, c_loss, p_loss, weighted]
 steps: 10
 asr: tiny
 train_feature: true
@@ -33,3 +33,4 @@ batch_size: 1
 
 ### seed for reproductivity
 seed: 42
+device: cuda
