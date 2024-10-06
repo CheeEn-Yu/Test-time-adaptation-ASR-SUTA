@@ -5,6 +5,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch import nn
 from jiwer import wer
 import whisper
+
 class TTADecode(whisper.decoding.DecodingTask):
     def _main_loop(self, audio_features, tokens, max_decoder_step=128):
         '''
@@ -141,7 +142,6 @@ class TTADecode(whisper.decoding.DecodingTask):
             scheduler.step()
         return tokens, loss, e_loss_list, c_loss, p_loss
     
-    @torch.autocast(device_type='cuda', dtype=torch.float16)
     def adapt(self, mel, args, optimizer, scheduler=None, scaler=None, generate_text=False):
         self.decoder.reset()
         n_audio = mel.shape[0]
@@ -230,63 +230,7 @@ def div_loss(x, non_blank=None, L_thd=64):
 
     return loss
 
-def HF_collect_params(args, model):
-    model.requires_grad_(False)
-    params = []
-    names = []
-    for name, param in model.named_parameters():
-        if 'feature' in args.train_params:
-            if 'conv' in str(name).split('.'):
-                param.requires_grad = True
-                params.append(param)
-                names.append(f"{name}")
-        if 'LN' in args.train_params:
-            if 'self_attn_layer_norm' in str(name).split('.'):
-                param.requires_grad = True
-                params.append(param)
-                names.append(f"{name}")
 
-    return names, params
-
-def SB_collect_params(model, bias_only=False, train_feature=False, train_all=False, train_LN=True):
-    """Collect the affine scale + shift parameters from batch norms.
-    Walk the model's modules and collect all batch normalization parameters.
-    Return the parameters and their names.
-    Note: other choices of parameterization are possible!
-    """
-    params = []
-    names = []
-    trainable = []
-    if bias_only:
-        trainable = ['bias']
-    else: 
-        trainable = ['weight', 'bias']
-
-
-    for nm, m in model.named_modules():
-        if train_LN: 
-            if isinstance(m, nn.LayerNorm):
-                for np, p in m.named_parameters():
-                    if np in trainable:  
-                        p.requires_grad = True
-                        params.append(p)
-                        names.append(f"{nm}.{np}")
-        if train_feature:
-            if len(str(nm).split('.')) > 1:
-                if str(nm).split('.')[1] == 'feature_extractor' or str(nm).split('.')[1] == 'feature_projection':
-                    for np, p in m.named_parameters():
-                        p.requires_grad = True
-                        params.append(p)
-                        names.append(f"{nm}.{np}")
-
-        if train_all: 
-            for np, p in m.named_parameters():
-                p.requires_grad = True
-                params.append(p)
-                names.append(f"{nm}.{np}")
-
-
-    return params, names
 def whisper_collect_params(model, encoderLN, decoderLN, train_feature=False, linear_layer=False, all_encoder=False):
     # collect trainable params
     params = []
@@ -351,6 +295,23 @@ def whisper_collect_params(model, encoderLN, decoderLN, train_feature=False, lin
 
     return params, names
 
+def HF_collect_params(args, model):
+    model.requires_grad_(False)
+    params = []
+    names = []
+    for name, param in model.named_parameters():
+        if 'feature' in args.train_params:
+            if 'conv' in str(name).split('.'):
+                param.requires_grad = True
+                params.append(param)
+                names.append(f"{name}")
+        if 'LN' in args.train_params:
+            if 'self_attn_layer_norm' in str(name).split('.'):
+                param.requires_grad = True
+                params.append(param)
+                names.append(f"{name}")
+
+    return names, params
 
 import torch.nn.functional as F
 # dropout

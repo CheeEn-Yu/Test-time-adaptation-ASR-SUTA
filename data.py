@@ -74,6 +74,11 @@ def create_dataset(split, name, path, batch_size=1, **kwargs):
         dataset = Dataset(split, batch_size, path, kwargs["noise_dir"], kwargs["snr"])
         print(f'[INFO]    There are {len(dataset)} samples.')
         return dataset, loader_bs
+    elif name.lower() == "covost2":
+        # ['en_de', 'en_tr', 'en_fa', 'en_sv-SE', 'en_mn', 'en_zh-CN', 'en_cy', 'en_ca', 'en_sl', 'en_et', 'en_id', 'en_ar', 'en_ta', 'en_lv', 'en_ja', 'fr_en', 'de_en', 'es_en', 'ca_en', 'it_en', 'ru_en', 'zh-CN_en', 'pt_en', 'fa_en', 'et_en', 'mn_en', 'nl_en', 'tr_en', 'ar_en', 'sv-SE_en', 'lv_en', 'sl_en', 'ta_en', 'ja_en', 'id_en', 'cy_en']
+        from corpus.covost2 import covost2Dataset as Dataset
+        dataset = Dataset(split, batch_size, path, kwargs["lang"], kwargs["noise_dir"], kwargs["snr"])
+        return dataset, loader_bs
         
     else:
         raise NotImplementedError
@@ -84,11 +89,11 @@ def create_dataset(split, name, path, batch_size=1, **kwargs):
     return dataset, loader_bs
 
 
-def load_SUTAdataset(split=None, name='librispeech', path=None, batch_size=1, extra_noise=0., num_workers=4, noise_dir=None, snr=0.):
+def load_SUTAdataset(split=None, name='librispeech', path=None, batch_size=1, extra_noise=0., num_workers=4, noise_dir=None, snr=0., lang="en"):
     ''' Prepare dataloader for training/validation'''
-    dataset, loader_bs = create_dataset(split, name, path, batch_size, noise_dir=noise_dir, snr=snr)
+    dataset, loader_bs = create_dataset(split, name, path, batch_size, noise_dir=noise_dir, snr=snr, lang=lang)
     collate_fn = None
-    if name.lower() != 'multilibri':
+    if name.lower() != 'multilibri' and name.lower() != 'covost2':
         collate_fn = partial(collect_audio_batch, extra_noise=extra_noise)
 
     dataloader = DataLoader(dataset, batch_size=loader_bs, shuffle=False,

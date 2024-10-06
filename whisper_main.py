@@ -12,6 +12,7 @@ from whisper.audio import (
     log_mel_spectrogram,
     pad_or_trim,
 )
+from nltk.translate.bleu_score import sentence_bleu
 from tqdm import tqdm
 from suta import *
 from data import *
@@ -29,7 +30,7 @@ def main(args):
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     normalizer = EnglishTextNormalizer()
     
-    dataset = load_SUTAdataset(name=args.dataset_name, path=args.dataset_dir, batch_size=1, noise_dir=args.noise_dir, snr=args.snr)
+    dataset = load_SUTAdataset(name=args.dataset_name, path=args.dataset_dir, batch_size=1, lang=args.lang, noise_dir=args.noise_dir, snr=args.snr)
     os.makedirs(args.exp_name, exist_ok=True)
     os.makedirs(f'{args.exp_name}/figs', exist_ok=True)
     config_str = OmegaConf.to_yaml(args)
@@ -48,7 +49,7 @@ def main(args):
 
             model = whisper.load_model(args.asr).to(DEVICE)
             params, names = whisper_collect_params(model, args.encoderLN, args.decoderLN, train_feature=args.train_feature)
-            options = whisper.DecodingOptions(language=args.lang, without_timestamps=True)
+            options = whisper.DecodingOptions(language=args.lang, without_timestamps=True, task=args.task)
             c_loss_list, p_loss_list, step_loss, wers = [], [], [], []
             lens, wavs, texts, files = batch
             f.write(f'idx:{count}'+'\n')
@@ -57,7 +58,7 @@ def main(args):
             if args.asr == 'large' or args.asr == 'large_v2' or args.asr == 'large_v3':
                 mel = log_mel_spectrogram(pad_or_trim(wavs[0]), n_mels=128).unsqueeze(0)
             else:
-                if args.dataset_name.lower() == "multilibri":
+                if args.dataset_name.lower() == "multilibri" or args.dataset_name.lower() == "covost2":
                     mel = log_mel_spectrogram(pad_or_trim(wavs[0].float())).unsqueeze(0)
                 else:
                     mel = log_mel_spectrogram(pad_or_trim(wavs[0])).unsqueeze(0)
@@ -81,18 +82,22 @@ def main(args):
             # get words before TTA
             with torch.no_grad():
                 _, ori_text = decode_obj.run(mel, max_decoder_step=args.max_decoder_step)
-                label = normalizer(texts[0]) if args.lang == "en" else texts[0]
-                ori_text = normalizer(ori_text[0]) if args.lang == "en" else ori_text[0]
-                ori_wer = wer(label, ori_text)
+                label = normalizer(texts[0]) if args.lang == "en" or args.task == "translation" else texts[0]
+                ori_text = normalizer(ori_text[0]) if args.lang == "en" or args.task == "translation" else ori_text[0]
+                try:
+                    ori_wer = wer(label, ori_text) if args.task == "transcribe" else sentence_bleu(label, ori_text)
+                except:
+                    print('label error')
+                    continue
                 wers.append(ori_wer)
-                f.write(f'ori({ori_wer}):{ori_text}\n')
+                f.write(f'ori({ori_wer:2f}):{ori_text}\n')
 
             # Start TTA
             for step in range(args.steps):
                 if step % 3 == 0 or step == args.steps-1:
                     adapt_text, loss, c_loss, p_loss = decode_obj.adapt(mel, args, optimizer, scheduler, generate_text=True)
-                    adapt_text = normalizer(adapt_text[0]) if args.lang == "en" else adapt_text[0]
-                    adapt_wer = wer(label, adapt_text)
+                    adapt_text = normalizer(adapt_text[0]) if args.lang == "en" or args.task == "translation" else adapt_text[0]
+                    adapt_wer = wer(label, adapt_text) if args.task == "transcribe" else sentence_bleu(label, adapt_text)
                     wers.append(adapt_wer)
                     f.write(f'step{step}({adapt_wer}): {adapt_text}\n')
                 else:
