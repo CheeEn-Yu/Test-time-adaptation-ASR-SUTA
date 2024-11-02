@@ -499,3 +499,149 @@ class transcriptionProcessor:
     def get_data(self):
         return self.data
 
+from transformers import WhisperForConditionalGeneration
+def hf_collect_params(model):
+    params, names = [], []
+    for param in model.parameters():
+        param.requires_grad = False
+    for name, param in model.named_parameters():
+        if "layer_norm" in name or "LayerNorm" in name:
+            params.append(param)
+            names.append(name)
+            param.requires_grad = True
+        elif "conv1" in name or "conv2" in name:
+            if "bias" in name:
+                params.append(param)
+                names.append(name)
+                param.requires_grad = True
+
+
+    return param, names
+
+class WhisperTTADecoder(WhisperForConditionalGeneration):
+    def decode(self, inputs, max_length=100, num_beams=1, do_sample=False, temperature=1.0):
+        """
+        Decoding function that supports Greedy, Sampling, and Beam Search decoding strategies.
+        Arguments:
+            inputs: Tensor, the input features for Whisper model.
+            max_length: int, the maximum number of tokens to generate.
+            num_beams: int, the number of beams for beam search. Set to 1 for greedy or sampling decoding.
+            do_sample: bool, whether to use sampling decoding. Set to True to enable sampling.
+            temperature: float, used for controlling randomness in sampling decoding.
+        """
+        if num_beams > 1:
+            # Beam Search Decoding
+            return self._beam_search_decode(inputs, max_length, num_beams)
+        elif do_sample:
+            # Sampling Decoding
+            return self._sample_decode(inputs, max_length, temperature)
+        else:
+            # Greedy Decoding
+            return self._greedy_decode(inputs, max_length)
+    
+    def _greedy_decode(self, inputs, max_length):
+        """
+        Greedy decoding implementation.
+        """
+        generated_ids = torch.tensor([[self.config.decoder_start_token_id]], device=inputs.device)
+        for _ in range(max_length):
+            outputs = self(input_features=inputs, decoder_input_ids=generated_ids)
+            next_token_logits = outputs.logits[:, -1, :]
+            next_token = next_token_logits.argmax(dim=-1, keepdim=True)
+            
+            generated_ids = torch.cat((generated_ids, next_token), dim=1)
+            if next_token.item() == self.config.eos_token_id:
+                break
+        return generated_ids
+
+    def _sample_decode(self, inputs, max_length, temperature):
+        """
+        Sampling decoding implementation.
+        """
+        generated_ids = torch.tensor([[self.config.decoder_start_token_id]], device=inputs.device)
+        for _ in range(max_length):
+            outputs = self(input_features=inputs, decoder_input_ids=generated_ids)
+            next_token_logits = outputs.logits[:, -1, :]
+            
+            # Apply temperature for sampling
+            next_token_logits = next_token_logits / temperature
+            next_token_probs = torch.softmax(next_token_logits, dim=-1)
+            
+            # Sample the next token
+            next_token = torch.multinomial(next_token_probs, num_samples=1)
+            generated_ids = torch.cat((generated_ids, next_token), dim=1)
+            if next_token.item() == self.config.eos_token_id:
+                break
+        return generated_ids
+
+    def _beam_search_decode(self, inputs, max_length, num_beams):
+        """
+        Beam search decoding implementation.
+        """
+        beam_sequences = [torch.tensor([[self.config.decoder_start_token_id]], device=inputs.device) for _ in range(num_beams)]
+        beam_scores = torch.zeros(num_beams, device=inputs.device)
+
+        for _ in range(max_length):
+            all_candidates = []
+            for i in range(num_beams):
+                outputs = self(input_features=inputs, decoder_input_ids=beam_sequences[i])
+                next_token_logits = outputs.logits[:, -1, :]
+                next_token_probs = torch.softmax(next_token_logits, dim=-1)
+
+                top_k_probs, top_k_tokens = torch.topk(next_token_probs, num_beams, dim=-1)
+                for k in range(num_beams):
+                    candidate = torch.cat([beam_sequences[i], top_k_tokens[:, k].unsqueeze(-1)], dim=1)
+                    candidate_score = beam_scores[i] + torch.log(top_k_probs[:, k])
+                    all_candidates.append((candidate_score, candidate))
+
+            ordered = sorted(all_candidates, key=lambda x: x[0], reverse=True)
+            beam_sequences = [seq for _, seq in ordered[:num_beams]]
+            beam_scores = torch.tensor([score for score, _ in ordered[:num_beams]], device=inputs.device)
+
+            if all(seq[0, -1] == self.config.eos_token_id for seq in beam_sequences):
+                break
+
+        best_sequence = beam_sequences[0]
+        return best_sequence
+    
+    def AED_suta(self, inputs, args, optimizer, scheduler=None, teacher_token_list=None, max_length=100, generate_text=False,**generation_args):
+        """
+        SUTA algorithm that implement test-time adaptation (TTA) to single utterence.
+        """
+        loss = 0
+        num_suta_token = 0
+        e_loss_list = []
+        generated_ids = torch.tensor([[self.config.decoder_start_token_id]], device=inputs.device)
+        if teacher_token_list is None:
+            with torch.no_grad():
+                teacher_token_list = self.decode(inputs)
+        for _ in range(len(teacher_token_list[0])-4):
+            num_suta_token+=1
+            outputs = self(input_features=inputs, decoder_input_ids=generated_ids)
+            next_token_logits = outputs.logits[:, -1, :]
+            next_token = next_token_logits.argmax(dim=-1, keepdim=True)
+            topk_logits = torch.topk(next_token_logits, k=args.topk).values
+            topk_logits = topk_logits/args.temp
+            e_loss = softmax_entropy(topk_logits, dim=1).mean(0).mean()
+            loss += (1/(1+args.alpha*torch.exp(-e_loss))) * e_loss
+            e_loss_list.append(e_loss.item())
+
+            # Append the predicted next token
+            generated_ids = torch.cat((generated_ids, next_token), dim=1)
+
+            # Stop if we reach the end-of-sequence token (e.g., EOS)
+            if next_token.item() == self.config.eos_token_id:
+                break
+        if num_suta_token == 0:
+            return generated_ids, loss
+        loss/=num_suta_token
+        loss.backward()
+        optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
+        output = generated_ids
+        if generate_text:
+            with torch.no_grad():
+                output = self.decode(inputs)
+        
+        return output, loss

@@ -2,7 +2,7 @@ import os
 import matplotlib.pyplot as plt
 import torch
 import hydra
-import evaluate
+# import evaluate
 from jiwer import wer
 from omegaconf import OmegaConf
 from whisper.normalizers import EnglishTextNormalizer
@@ -13,7 +13,7 @@ from whisper.audio import (
     log_mel_spectrogram,
     pad_or_trim,
 )
-# from nltk.translate.bleu_score import sentence_bleu
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 from tqdm import tqdm
 from suta import *
 from data import *
@@ -30,7 +30,8 @@ def main(args):
         torch.cuda.manual_seed_all(seed)
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
     if args.task == "translation":
-        bleu = evaluate.load('bleu')
+        smoothing_function = SmoothingFunction().method1
+    #     bleu = evaluate.load('bleu')
     normalizer = EnglishTextNormalizer()
     
     dataset = load_SUTAdataset(name=args.dataset_name, path=args.dataset_dir, batch_size=1, lang=args.lang, noise_dir=args.noise_dir, snr=args.snr)
@@ -89,7 +90,9 @@ def main(args):
                     continue
                 _, ori_text = decode_obj.run(mel, max_decoder_step=args.max_decoder_step)
                 ori_text = normalizer(ori_text[0]) if args.lang == "en" or args.task == "translation" else ori_text[0]
-                ori_wer = wer(label, ori_text) if args.task == "transcribe" else bleu.compute(references=[label], predictions=[ori_text])['bleu']
+                # ori_wer = wer(label, ori_text) if args.task == "transcribe" else bleu.compute(references=[label], predictions=[ori_text])['bleu']
+                ori_wer = wer(label, ori_text) if args.task == "transcribe" else sentence_bleu([label], ori_text, smoothing_function=smoothing_function)
+
                 wers.append(ori_wer)
                 f.write(f'ori({ori_wer:2f}):{ori_text}\n')
 
@@ -98,7 +101,8 @@ def main(args):
                 if step % 3 == 0 or step == args.steps-1:
                     adapt_text, loss, c_loss, p_loss = decode_obj.adapt(mel, args, optimizer, scheduler, generate_text=True)
                     adapt_text = normalizer(adapt_text[0]) if args.lang == "en" or args.task == "translation" else adapt_text[0]
-                    adapt_wer = wer(label, adapt_text) if args.task == "transcribe" else bleu.compute(references=[label], predictions=[adapt_text])['bleu']
+                    # adapt_wer = wer(label, adapt_text) if args.task == "transcribe" else bleu.compute(references=[label], predictions=[adapt_text])['bleu']
+                    adapt_wer = wer(label, adapt_text) if args.task == "transcribe" else sentence_bleu([label], adapt_text, smoothing_function=smoothing_function)
                     wers.append(adapt_wer)
                     f.write(f'step{step}({adapt_wer}): {adapt_text}\n')
                 else:

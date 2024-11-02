@@ -1,0 +1,35 @@
+exp_name: ex_data/1103_hf_test
+task: transcribe # ["transcribe", "translation"]
+topk: 30  # the dimension be calculated entropy
+alpha: 10 # the power of weighted, larger => higher entropy token accounts more
+train_params: [feature, LN] # currently supported: feature -> CNN bias, LN (both encoder and decoder), ...
+objective_f: [e_loss, weighted]     # [e_loss, c_loss, p_loss, weighted]
+steps: 10
+asr: openai/whisper-tiny
+train_feature: true
+encoderLN: true
+decoderLN: true
+allEncoder: false
+repeat_penal: false
+max_decoder_step: 128 # lower if OOM
+num_data: False # False represent all data, set num_data for rapid test
+### optimizer & train hyparameters & learning rate scheduler
+opt: AdamW
+episodic: true # load pretrained model again for every batch
+temp: 4.5 # temperature scaling
+em_coef: 0.5 # for balancing entropy minimization and minimum class confusion for baseline
+p_ratio: 1.0
+lr: 1e-3
+scheduler: null # null or CosineAnnealingLR
+t_max: 10
+lr_min: 1e-3
+### dataset
+noise_dir: ./res # only for multilibri, currently supported: null, ../res 
+snr: 10 # only for multilibri
+dataset_name: noisylibri  # ['librispeech', 'noisylibri', 'multilibri'] for self-define noisy Librispeech (English only), use noisylibri
+dataset_dir: /home/allens/Desktop/Test-time-adaptation-ASR-SUTA/data/libri_test_noise_10.0  # for multi librispeech dataset, this is lang: ['dutch', 'french', 'german', 'italian', 'polish', 'portuguese', 'spanish']
+lang: en  # ['nl', 'fr', 'de', 'it', 'pl', 'pt', 'es'], reference: https://github.com/openai/whisper/blob/main/whisper/tokenizer.py
+batch_size: 1
+
+### seed for reproductivity
+seed: 42
