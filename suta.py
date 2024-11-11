@@ -295,24 +295,6 @@ def whisper_collect_params(model, encoderLN, decoderLN, train_feature=False, lin
 
     return params, names
 
-def HF_collect_params(args, model):
-    model.requires_grad_(False)
-    params = []
-    names = []
-    for name, param in model.named_parameters():
-        if 'feature' in args.train_params:
-            if 'conv' in str(name).split('.'):
-                param.requires_grad = True
-                params.append(param)
-                names.append(f"{name}")
-        if 'LN' in args.train_params:
-            if 'self_attn_layer_norm' in str(name).split('.'):
-                param.requires_grad = True
-                params.append(param)
-                names.append(f"{name}")
-
-    return names, params
-
 import torch.nn.functional as F
 # dropout
 def consist_loss(model, input_values, outputs):
@@ -516,10 +498,10 @@ def hf_collect_params(model):
                 param.requires_grad = True
 
 
-    return param, names
+    return params, names
 
 class WhisperTTADecoder(WhisperForConditionalGeneration):
-    def decode(self, inputs, max_length=100, num_beams=1, do_sample=False, temperature=1.0):
+    def decode(self, inputs, max_length=64, num_beams=1, do_sample=False, temperature=1.0, forced_decoder_ids=None, **generation_args):
         """
         Decoding function that supports Greedy, Sampling, and Beam Search decoding strategies.
         Arguments:
@@ -531,19 +513,22 @@ class WhisperTTADecoder(WhisperForConditionalGeneration):
         """
         if num_beams > 1:
             # Beam Search Decoding
-            return self._beam_search_decode(inputs, max_length, num_beams)
+            return self._beam_search_decode(inputs, max_length, num_beams, forced_decoder_ids)
         elif do_sample:
             # Sampling Decoding
-            return self._sample_decode(inputs, max_length, temperature)
+            return self._sample_decode(inputs, max_length, temperature, forced_decoder_ids)
         else:
             # Greedy Decoding
-            return self._greedy_decode(inputs, max_length)
+            return self._greedy_decode(inputs, max_length, forced_decoder_ids)
     
-    def _greedy_decode(self, inputs, max_length):
+    def _greedy_decode(self, inputs, max_length, forced_decoder_ids, **generation_args):
         """
         Greedy decoding implementation.
         """
         generated_ids = torch.tensor([[self.config.decoder_start_token_id]], device=inputs.device)
+        if forced_decoder_ids:
+            forced_token_ids = torch.tensor([token_id for _, token_id in forced_decoder_ids], device=inputs.device).unsqueeze(0)
+            generated_ids = torch.cat([generated_ids, forced_token_ids], dim=1)
         for _ in range(max_length):
             outputs = self(input_features=inputs, decoder_input_ids=generated_ids)
             next_token_logits = outputs.logits[:, -1, :]
@@ -554,11 +539,14 @@ class WhisperTTADecoder(WhisperForConditionalGeneration):
                 break
         return generated_ids
 
-    def _sample_decode(self, inputs, max_length, temperature):
+    def _sample_decode(self, inputs, max_length, temperature, forced_decoder_ids):
         """
         Sampling decoding implementation.
         """
         generated_ids = torch.tensor([[self.config.decoder_start_token_id]], device=inputs.device)
+        if forced_decoder_ids:
+            forced_token_ids = torch.tensor([token_id for _, token_id in forced_decoder_ids], device=inputs.device).unsqueeze(0)
+            generated_ids = torch.cat([generated_ids, forced_token_ids], dim=1)
         for _ in range(max_length):
             outputs = self(input_features=inputs, decoder_input_ids=generated_ids)
             next_token_logits = outputs.logits[:, -1, :]
@@ -574,12 +562,15 @@ class WhisperTTADecoder(WhisperForConditionalGeneration):
                 break
         return generated_ids
 
-    def _beam_search_decode(self, inputs, max_length, num_beams):
+    def _beam_search_decode(self, inputs, max_length, num_beams, forced_decoder_ids):
         """
         Beam search decoding implementation.
         """
         beam_sequences = [torch.tensor([[self.config.decoder_start_token_id]], device=inputs.device) for _ in range(num_beams)]
         beam_scores = torch.zeros(num_beams, device=inputs.device)
+        if forced_decoder_ids:
+            forced_token_ids = torch.tensor([token_id for _, token_id in forced_decoder_ids], device=inputs.device).unsqueeze(0)
+            beam_sequences = [torch.cat([seq, forced_token_ids], dim=1) for seq in beam_sequences]
 
         for _ in range(max_length):
             all_candidates = []
@@ -604,14 +595,19 @@ class WhisperTTADecoder(WhisperForConditionalGeneration):
         best_sequence = beam_sequences[0]
         return best_sequence
     
-    def AED_suta(self, inputs, args, optimizer, scheduler=None, teacher_token_list=None, max_length=100, generate_text=False,**generation_args):
+    def AED_suta(self, inputs, args, optimizer, scheduler=None, teacher_token_list=None, max_length=100, generate_text=False, forced_decoder_ids=None, **generation_args):
         """
         SUTA algorithm that implement test-time adaptation (TTA) to single utterence.
         """
+        optimizer.zero_grad()
         loss = 0
         num_suta_token = 0
         e_loss_list = []
         generated_ids = torch.tensor([[self.config.decoder_start_token_id]], device=inputs.device)
+        if forced_decoder_ids:
+            forced_token_ids = torch.tensor([token_id for _, token_id in forced_decoder_ids], device=inputs.device).unsqueeze(0)
+            generated_ids = torch.cat([generated_ids, forced_token_ids], dim=1)
+        
         if teacher_token_list is None:
             with torch.no_grad():
                 teacher_token_list = self.decode(inputs)
@@ -620,11 +616,11 @@ class WhisperTTADecoder(WhisperForConditionalGeneration):
             outputs = self(input_features=inputs, decoder_input_ids=generated_ids)
             next_token_logits = outputs.logits[:, -1, :]
             next_token = next_token_logits.argmax(dim=-1, keepdim=True)
-            topk_logits = torch.topk(next_token_logits, k=args.topk).values
-            topk_logits = topk_logits/args.temp
-            e_loss = softmax_entropy(topk_logits, dim=1).mean(0).mean()
-            loss += (1/(1+args.alpha*torch.exp(-e_loss))) * e_loss
-            e_loss_list.append(e_loss.item())
+            # topk_logits = torch.topk(next_token_logits, k=args.topk).values
+            # topk_logits = topk_logits/args.temp
+            # e_loss = softmax_entropy(topk_logits, dim=1).mean(0).mean()
+            # loss += (1/(1+args.alpha*torch.exp(-e_loss))) * e_loss
+            # e_loss_list.append(e_loss.item())
 
             # Append the predicted next token
             generated_ids = torch.cat((generated_ids, next_token), dim=1)
@@ -634,7 +630,14 @@ class WhisperTTADecoder(WhisperForConditionalGeneration):
                 break
         if num_suta_token == 0:
             return generated_ids, loss
-        loss/=num_suta_token
+        topk_logits = torch.topk(outputs.logits, k=args.topk).values.squeeze(0)
+        topk_logits = topk_logits/args.temp
+        e_loss = softmax_entropy(topk_logits, dim=1)
+        e_loss = (1/(1+args.alpha*torch.exp(-e_loss))) * e_loss
+        loss = e_loss.mean()
+        if 'c_loss' in args.objective_f:
+            c_loss = mcc_loss(topk_logits, dim=1, class_num=args.topk)
+            loss = loss * args.em_coef + c_loss * (1 - args.em_coef)
         loss.backward()
         optimizer.step()
         if scheduler is not None:

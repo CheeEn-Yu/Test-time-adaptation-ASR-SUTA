@@ -54,6 +54,8 @@ def main(args):
             # load model
             processor = AutoProcessor.from_pretrained(args.asr)
             model = WhisperTTADecoder.from_pretrained(args.asr, device_map='auto')
+            forced_decoder_ids = processor.get_decoder_prompt_ids(language=args.lang, task=args.task)
+
             params, names = hf_collect_params(model)
 
             if count == 0:
@@ -69,12 +71,12 @@ def main(args):
                     print(f'train_param ratio: {train_ratio}')
                     logfile.write(f'train_param ratio: {train_ratio}\n')
                 
-            optimizer, scheduler = setup_optimizer(args, [params], args.opt, args.lr, weight_decay=1e-4, scheduler=args.scheduler)
+            optimizer, scheduler = setup_optimizer(args, params, args.opt, args.lr, weight_decay=1e-5, scheduler=args.scheduler)
             inputs = processor(wavs[0],sampling_rate=16000, return_tensors="pt")
             input_features = inputs.input_features.to(model.device)
 
             # Original transcription
-            teacher_token_list = model.decode(input_features)
+            teacher_token_list = model.decode(input_features, forced_decoder_ids=forced_decoder_ids)
             transcription = processor.batch_decode(teacher_token_list, skip_special_tokens=True)[0]
             transcription = normalizer(transcription)
             ori_wer = wer(label, transcription)
@@ -83,14 +85,18 @@ def main(args):
             # Start TTA
             for step in range(args.steps):
                 if step % 3 == 0 or step == args.steps-1:
-                    outputs, loss = model.AED_suta(input_features, args, optimizer, teacher_token_list=teacher_token_list, generate_text=True)
+                    outputs, loss = model.AED_suta(input_features, args, optimizer, teacher_token_list=teacher_token_list, forced_decoder_ids=forced_decoder_ids, generate_text=True)
                     transcription = processor.batch_decode(outputs, skip_special_tokens=True)[0]
                     transcription = normalizer(transcription)
                     adapt_wer = wer(label, transcription)
                     f.write(f'step{step}({adapt_wer:.5f}): {transcription}\n')
                 else:
-                    outputs, loss = model.AED_suta(input_features, args, optimizer, teacher_token_list=teacher_token_list)
-                step_loss.append(loss.item())
+                    outputs, loss = model.AED_suta(input_features, args, optimizer, teacher_token_list=teacher_token_list, forced_decoder_ids=forced_decoder_ids)
+                try:
+                    step_loss.append(loss.item())
+                except:
+                    step_loss.append(loss)
+
 
 
 
