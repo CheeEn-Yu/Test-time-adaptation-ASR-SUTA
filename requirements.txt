@@ -4,10 +4,7 @@ pandas
 jiwer
 torchaudio
 soundfile
-# cn2an
 openai-whisper
-# opencc-python-reimplemented
-# nltk
 omegaconf
 hydra-core
 matplotlib

@@ -17,8 +17,12 @@ class covost2Dataset(Dataset):
         # Setup
         split = ['test']
         self.SNR = snr
-        self.noisefilenames = None if noise_dir is None else glob.glob(os.path.join(noise_dir, "**/*.wav"), recursive=True)
-        if self.noisefilenames is not None:
+        if noise_dir is None:
+            self.noisefilenames = None
+        elif noise_dir == 'Gaussian':
+            self.noisefilenames = 'Gaussian'
+        else:
+            self.noisefilenames = glob.glob(os.path.join(noise_dir, "**/*.wav"), recursive=True)
             self.noisefilenames.append("Gaussian")
         self.bucket_size = bucket_size
         ds = load_dataset("covost2", f'{lang}_en', data_dir=path, split='test', trust_remote_code=True)
@@ -28,6 +32,9 @@ class covost2Dataset(Dataset):
     def __getitem__(self, index):
         if self.noisefilenames is None:
             return len(self.ds[index]['audio']['array'])/16000, self.ds[index]['audio']['array'], self.ds[index]['translation'], self.ds[index]['file']
+        elif self.noisefilenames == 'Gaussian':
+            noise = np.random.randn(*self.ds[index]['audio']['array'].shape)
+            
         else:
             noisefile = random.choice(self.noisefilenames)
             if noisefile == "Gaussian":
@@ -42,8 +49,8 @@ class covost2Dataset(Dataset):
                 if len(noise)>=len(self.ds[index]['audio']['array']):
                     noise = noise[0:len(self.ds[index]['audio']['array'])]
 
-            clean_snr, noise_snr, noisy_snr = snr_mixer(self.ds[index]['audio']['array'], noise, self.SNR)
-            return len(self.ds[index]['audio']['array'])/16000, noisy_snr, self.ds[index]['translation'], self.ds[index]['file']
+        clean_snr, noise_snr, noisy_snr = snr_mixer(self.ds[index]['audio']['array'], noise, self.SNR)
+        return len(self.ds[index]['audio']['array'])/16000, noisy_snr, self.ds[index]['translation'], self.ds[index]['file']
 
     def __len__(self):
         return len(self.ds)

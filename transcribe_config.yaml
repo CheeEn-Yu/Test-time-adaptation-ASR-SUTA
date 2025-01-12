@@ -1,9 +1,9 @@
-exp_name: ex_data/1103_hf_test
+exp_name: ex_data/1112_no_cnn
 task: transcribe # ["transcribe", "translation"]
 topk: 30  # the dimension be calculated entropy
 alpha: 10 # the power of weighted, larger => higher entropy token accounts more
-train_params: [feature, LN] # currently supported: feature -> CNN bias, LN (both encoder and decoder), ...
-objective_f: [e_loss, weighted]     # [e_loss, c_loss, p_loss, weighted]
+train_params: [LN] # currently supported: feature -> CNN bias, LN (both encoder and decoder), ...
+objective_f: [e_loss, c_loss, weighted]     # [e_loss, c_loss, p_loss, weighted]
 steps: 10
 asr: openai/whisper-tiny
 train_feature: true
@@ -12,7 +12,7 @@ decoderLN: true
 allEncoder: false
 repeat_penal: false
 max_decoder_step: 128 # lower if OOM
-num_data: False # False represent all data, set num_data for rapid test
+num_data: 300 # False represent all data, set num_data for rapid test
 ### optimizer & train hyparameters & learning rate scheduler
 opt: AdamW
 episodic: true # load pretrained model again for every batch

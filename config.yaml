@@ -1,34 +1,34 @@
-exp_name: ex_data/1006_translation
-task: translation # ["transcribe", "translation"]
+exp_name: ex_data/0103_nl_translate_Gaussian
+task: translate # ["transcribe", "translation"]
 topk: 30  # the dimension be calculated entropy
 alpha: 10 # the power of weighted, larger => higher entropy token accounts more
 train_params: [feature, LN] # currently supported: feature -> CNN bias, LN (both encoder and decoder), ...
 objective_f: [e_loss, weighted, p_loss]     # [e_loss, c_loss, p_loss, weighted]
 steps: 10
-asr: tiny
+asr: openai/whisper-medium
 train_feature: true
 encoderLN: true
 decoderLN: true
 allEncoder: false
 repeat_penal: false
 max_decoder_step: 128 # lower if OOM
-num_data: 1000 # False represent all data, set num_data for rapid test
+num_data: 100 # False represent all data, set num_data for rapid test
 ### optimizer & train hyparameters & learning rate scheduler
 opt: AdamW
 episodic: true # load pretrained model again for every batch
 temp: 4.5 # temperature scaling
 em_coef: 0.5 # for balancing entropy minimization and minimum class confusion for baseline
 p_ratio: 1.0
-lr: 1e-3
+lr: 5e-4
 scheduler: null # null or CosineAnnealingLR
 t_max: 10
-lr_min: 1e-3
+lr_min: 1e-4
 ### dataset
-noise_dir: ./res # only for multilibri, currently supported: null, ../res 
+noise_dir: Gaussian # only for multilibri, currently supported: null, ../res 
 snr: 10 # only for multilibri
 dataset_name: covost2  # ['librispeech', 'noisylibri', 'multilibri'] for self-define noisy Librispeech (English only), use noisylibri
-dataset_dir: ../TTA_data/covost2_it  # for multi librispeech dataset, this is lang: ['dutch', 'french', 'german', 'italian', 'polish', 'portuguese', 'spanish']
-lang: it  # ['nl', 'fr', 'de', 'it', 'pl', 'pt', 'es'], reference: https://github.com/openai/whisper/blob/main/whisper/tokenizer.py
+dataset_dir: ../TTA_data/covost2_nl  # for multi librispeech dataset, this is lang: ['dutch', 'french', 'german', 'italian', 'polish', 'portuguese', 'spanish']
+lang: nl  # ['nl', 'fr', 'de', 'it', 'pl', 'pt', 'es'], reference: https://github.com/openai/whisper/blob/main/whisper/tokenizer.py
 batch_size: 1
 
 ### seed for reproductivity

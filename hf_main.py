@@ -12,10 +12,9 @@ from nltk.translate.bleu_score import sentence_bleu
 from tqdm import tqdm
 from suta import *
 from data import *
-# from timeit import default_timer
 
 
-@hydra.main(version_base=None, config_path=".", config_name="transcribe_config")
+@hydra.main(version_base=None, config_path=".", config_name="config")
 def main(args):
     seed = args.seed
     torch.backends.cudnn.deterministic = True
@@ -79,45 +78,44 @@ def main(args):
             teacher_token_list = model.decode(input_features, forced_decoder_ids=forced_decoder_ids)
             transcription = processor.batch_decode(teacher_token_list, skip_special_tokens=True)[0]
             transcription = normalizer(transcription)
-            ori_wer = wer(label, transcription)
+            ori_wer = wer(label, transcription) if args.task == "transcribe" else sentence_bleu([label], transcription)
             f.write(f'ori({ori_wer:.5f}):{transcription}\n')
 
             # Start TTA
             for step in range(args.steps):
                 if step % 3 == 0 or step == args.steps-1:
-                    outputs, loss = model.AED_suta(input_features, args, optimizer, teacher_token_list=teacher_token_list, forced_decoder_ids=forced_decoder_ids, generate_text=True)
+                    outputs, loss, e_loss, p_loss = model.AED_suta(input_features, args, optimizer, teacher_token_list=teacher_token_list, forced_decoder_ids=forced_decoder_ids, generate_text=True)
                     transcription = processor.batch_decode(outputs, skip_special_tokens=True)[0]
                     transcription = normalizer(transcription)
-                    adapt_wer = wer(label, transcription)
+                    adapt_wer = wer(label, transcription) if args.task == "transcribe" else sentence_bleu([label], transcription)
                     f.write(f'step{step}({adapt_wer:.5f}): {transcription}\n')
                 else:
-                    outputs, loss = model.AED_suta(input_features, args, optimizer, teacher_token_list=teacher_token_list, forced_decoder_ids=forced_decoder_ids)
+                    outputs, loss, e_loss, p_loss = model.AED_suta(input_features, args, optimizer, teacher_token_list=teacher_token_list, forced_decoder_ids=forced_decoder_ids)
                 try:
                     step_loss.append(loss.item())
+                    p_loss_list.append(p_loss.item())
                 except:
                     step_loss.append(loss)
-
-
+                    p_loss_list.append(p_loss)
 
 
             # 10 loss figure
-            if count < 5 or count >2930:
-                fig0, ax0 = plt.subplots(1,1)
-                color = 'tab:red'
-                ax0.set_xlabel('step')
-                ax0.set_ylabel('loss', color=color)
-                ax0.plot([loss for loss in step_loss], color=color, marker='o')
-                ax0.tick_params(axis='y', labelcolor=color)
+            fig0, ax0 = plt.subplots(1,1)
+            color = 'tab:red'
+            ax0.set_xlabel('step')
+            ax0.set_ylabel('loss', color=color)
+            ax0.plot([loss for loss in step_loss], color=color, marker='o')
+            ax0.tick_params(axis='y', labelcolor=color)
 
-                # ax2 = ax0.twinx()  # 共享 x 軸
-                # color = 'tab:blue'
-                # ax2.set_xlabel('step')
-                # ax2.set_ylabel('e_loss', color=color)
-                # ax2.plot([i for i in e_loss_list], color=color, marker='o')
-                # ax2.tick_params(axis='y', labelcolor=color)
-                plt.title(f'idx:{count}')
-                plt.savefig(f'{args.exp_name}/figs/suta_{count}.png')
-                plt.close()
+            ax2 = ax0.twinx()  # 共享 x 軸
+            color = 'tab:blue'
+            ax2.set_xlabel('step')
+            ax2.set_ylabel('p_loss', color=color)
+            ax2.plot([i for i in p_loss_list], color=color, marker='o')
+            ax2.tick_params(axis='y', labelcolor=color)
+            plt.title(f'idx:{count}')
+            plt.savefig(f'{args.exp_name}/figs/suta_{count}.png')
+            plt.close()
 
             f.write("=======================================\n")
 

@@ -7,6 +7,9 @@ from jiwer import wer
 import whisper
 
 class TTADecode(whisper.decoding.DecodingTask):
+    '''
+    This decoding strategy is fitting in Whisper original codebase.
+    '''
     def _main_loop(self, audio_features, tokens, max_decoder_step=128):
         '''
         Original Whisper autoregressive decode
@@ -89,7 +92,7 @@ class TTADecode(whisper.decoding.DecodingTask):
         try:
             for i in range(self.teacher_forcing_step-3):
                 token_count += 1
-                logits = self.inference.logits(tokens, audio_features) # (1,2,51864)
+                logits = self.inference.logits(tokens, audio_features) # dimension: (1,2,51864)
                 if (
                     i == 0 and self.tokenizer.no_speech is not None
                 ):  # save no_speech_probs
@@ -161,6 +164,9 @@ class TTADecode(whisper.decoding.DecodingTask):
         return texts, loss.item(), c_loss, p_loss
 
 def my_greedy_decode(model, input_features, max_step):
+    '''
+    self-implement greedy_decode example for HuggingFace codebase.
+    '''
     # greedy decode for pseudo label
     ori_generated_ids = torch.tensor([[1]]) * model.config.decoder_start_token_id
     ori_generated_ids = ori_generated_ids.to('cuda')
@@ -491,11 +497,11 @@ def hf_collect_params(model):
             params.append(param)
             names.append(name)
             param.requires_grad = True
-        elif "conv1" in name or "conv2" in name:
-            if "bias" in name:
-                params.append(param)
-                names.append(name)
-                param.requires_grad = True
+        # elif "conv1" in name or "conv2" in name:
+        #     if "bias" in name:
+        #         params.append(param)
+        #         names.append(name)
+        #         param.requires_grad = True
 
 
     return params, names
@@ -601,6 +607,8 @@ class WhisperTTADecoder(WhisperForConditionalGeneration):
         """
         optimizer.zero_grad()
         loss = 0
+        e_loss = 0
+        p_loss = 0
         num_suta_token = 0
         e_loss_list = []
         generated_ids = torch.tensor([[self.config.decoder_start_token_id]], device=inputs.device)
@@ -616,28 +624,29 @@ class WhisperTTADecoder(WhisperForConditionalGeneration):
             outputs = self(input_features=inputs, decoder_input_ids=generated_ids)
             next_token_logits = outputs.logits[:, -1, :]
             next_token = next_token_logits.argmax(dim=-1, keepdim=True)
-            # topk_logits = torch.topk(next_token_logits, k=args.topk).values
-            # topk_logits = topk_logits/args.temp
-            # e_loss = softmax_entropy(topk_logits, dim=1).mean(0).mean()
-            # loss += (1/(1+args.alpha*torch.exp(-e_loss))) * e_loss
-            # e_loss_list.append(e_loss.item())
-
             # Append the predicted next token
             generated_ids = torch.cat((generated_ids, next_token), dim=1)
 
-            # Stop if we reach the end-of-sequence token (e.g., EOS)
-            if next_token.item() == self.config.eos_token_id:
-                break
-        if num_suta_token == 0:
-            return generated_ids, loss
         topk_logits = torch.topk(outputs.logits, k=args.topk).values.squeeze(0)
+        # Don't calculate tag token entropy
+        topk_logits = topk_logits[4:, :]
         topk_logits = topk_logits/args.temp
         e_loss = softmax_entropy(topk_logits, dim=1)
-        e_loss = (1/(1+args.alpha*torch.exp(-e_loss))) * e_loss
+        if 'weighted' in args.objective_f:
+            e_loss = (1/(1+args.alpha*torch.exp(-e_loss))) * e_loss
+
         loss = e_loss.mean()
         if 'c_loss' in args.objective_f:
             c_loss = mcc_loss(topk_logits, dim=1, class_num=args.topk)
             loss = loss * args.em_coef + c_loss * (1 - args.em_coef)
+        if 'p_loss' in args.objective_f and teacher_token_list is not None:
+            criterion = nn.CrossEntropyLoss()
+            try:
+                p_loss = criterion(outputs.logits[0], teacher_token_list[0,1:])
+            except:
+                print(outputs.logits[0].shape)
+                print(teacher_token_list[0,1:].shape)
+            loss += p_loss
         loss.backward()
         optimizer.step()
         if scheduler is not None:
@@ -647,4 +656,4 @@ class WhisperTTADecoder(WhisperForConditionalGeneration):
             with torch.no_grad():
                 output = self.decode(inputs)
         
-        return output, loss
+        return output, loss, e_loss, p_loss
