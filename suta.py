@@ -5,6 +5,162 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch import nn
 from jiwer import wer
 import whisper
+from transformers import WhisperForConditionalGeneration
+
+class WhisperTTADecoder(WhisperForConditionalGeneration):
+    def decode(self, inputs, max_length=64, num_beams=1, do_sample=False, temperature=1.0, forced_decoder_ids=None, **generation_args):
+        """
+        Decoding function that supports Greedy, Sampling, and Beam Search decoding strategies.
+        Arguments:
+            inputs: Tensor, the input features for Whisper model.
+            max_length: int, the maximum number of tokens to generate.
+            num_beams: int, the number of beams for beam search. Set to 1 for greedy or sampling decoding.
+            do_sample: bool, whether to use sampling decoding. Set to True to enable sampling.
+            temperature: float, used for controlling randomness in sampling decoding.
+        """
+        if num_beams > 1:
+            # Beam Search Decoding
+            return self._beam_search_decode(inputs, max_length, num_beams, forced_decoder_ids)
+        elif do_sample:
+            # Sampling Decoding
+            return self._sample_decode(inputs, max_length, temperature, forced_decoder_ids)
+        else:
+            # Greedy Decoding
+            return self._greedy_decode(inputs, max_length, forced_decoder_ids)
+    
+    def _greedy_decode(self, inputs, max_length, forced_decoder_ids, **generation_args):
+        """
+        Greedy decoding implementation.
+        """
+        generated_ids = torch.tensor([[self.config.decoder_start_token_id]], device=inputs.device)
+        if forced_decoder_ids:
+            forced_token_ids = torch.tensor([token_id for _, token_id in forced_decoder_ids], device=inputs.device).unsqueeze(0)
+            generated_ids = torch.cat([generated_ids, forced_token_ids], dim=1)
+        for _ in range(max_length):
+            outputs = self(input_features=inputs, decoder_input_ids=generated_ids)
+            next_token_logits = outputs.logits[:, -1, :]
+            next_token = next_token_logits.argmax(dim=-1, keepdim=True)
+            
+            generated_ids = torch.cat((generated_ids, next_token), dim=1)
+            if next_token.item() == self.config.eos_token_id:
+                break
+        return generated_ids
+
+    def _sample_decode(self, inputs, max_length, temperature, forced_decoder_ids):
+        """
+        Sampling decoding implementation.
+        """
+        generated_ids = torch.tensor([[self.config.decoder_start_token_id]], device=inputs.device)
+        if forced_decoder_ids:
+            forced_token_ids = torch.tensor([token_id for _, token_id in forced_decoder_ids], device=inputs.device).unsqueeze(0)
+            generated_ids = torch.cat([generated_ids, forced_token_ids], dim=1)
+        for _ in range(max_length):
+            outputs = self(input_features=inputs, decoder_input_ids=generated_ids)
+            next_token_logits = outputs.logits[:, -1, :]
+            
+            # Apply temperature for sampling
+            next_token_logits = next_token_logits / temperature
+            next_token_probs = torch.softmax(next_token_logits, dim=-1)
+            
+            # Sample the next token
+            next_token = torch.multinomial(next_token_probs, num_samples=1)
+            generated_ids = torch.cat((generated_ids, next_token), dim=1)
+            if next_token.item() == self.config.eos_token_id:
+                break
+        return generated_ids
+
+    def _beam_search_decode(self, inputs, max_length, num_beams, forced_decoder_ids):
+        """
+        Beam search decoding implementation.
+        """
+        beam_sequences = [torch.tensor([[self.config.decoder_start_token_id]], device=inputs.device) for _ in range(num_beams)]
+        beam_scores = torch.zeros(num_beams, device=inputs.device)
+        if forced_decoder_ids:
+            forced_token_ids = torch.tensor([token_id for _, token_id in forced_decoder_ids], device=inputs.device).unsqueeze(0)
+            beam_sequences = [torch.cat([seq, forced_token_ids], dim=1) for seq in beam_sequences]
+
+        for _ in range(max_length):
+            all_candidates = []
+            for i in range(num_beams):
+                outputs = self(input_features=inputs, decoder_input_ids=beam_sequences[i])
+                next_token_logits = outputs.logits[:, -1, :]
+                next_token_probs = torch.softmax(next_token_logits, dim=-1)
+
+                top_k_probs, top_k_tokens = torch.topk(next_token_probs, num_beams, dim=-1)
+                for k in range(num_beams):
+                    candidate = torch.cat([beam_sequences[i], top_k_tokens[:, k].unsqueeze(-1)], dim=1)
+                    candidate_score = beam_scores[i] + torch.log(top_k_probs[:, k])
+                    all_candidates.append((candidate_score, candidate))
+
+            ordered = sorted(all_candidates, key=lambda x: x[0], reverse=True)
+            beam_sequences = [seq for _, seq in ordered[:num_beams]]
+            beam_scores = torch.tensor([score for score, _ in ordered[:num_beams]], device=inputs.device)
+
+            if all(seq[0, -1] == self.config.eos_token_id for seq in beam_sequences):
+                break
+
+        best_sequence = beam_sequences[0]
+        return best_sequence
+    
+    def AED_suta(self, inputs, args, optimizer, scheduler=None, teacher_token_list=None, max_length=100, generate_text=False, forced_decoder_ids=None, **generation_args):
+        """
+        SUTA algorithm that implement test-time adaptation (TTA) to single utterence.
+        """
+        optimizer.zero_grad()
+        loss = 0
+        e_loss = 0
+        p_loss = 0
+        num_suta_token = 0
+        e_loss_list = []
+        generated_ids = torch.tensor([[self.config.decoder_start_token_id]], device=inputs.device)
+        if forced_decoder_ids:
+            forced_token_ids = torch.tensor([token_id for _, token_id in forced_decoder_ids], device=inputs.device).unsqueeze(0)
+            generated_ids = torch.cat([generated_ids, forced_token_ids], dim=1)
+        
+
+        if 'e_loss' in args.objective_f:
+            for _ in range(len(teacher_token_list[0])-4):
+                num_suta_token+=1
+                outputs = self(input_features=inputs, decoder_input_ids=generated_ids)
+                next_token_logits = outputs.logits[:, -1, :]
+                next_token = next_token_logits.argmax(dim=-1, keepdim=True)
+                # Append the predicted next token
+                generated_ids = torch.cat((generated_ids, next_token), dim=1)
+            topk_logits = torch.topk(outputs.logits, k=args.topk).values.squeeze(0)
+            # Don't calculate tag token entropy
+            topk_logits = topk_logits[4:, :]
+            topk_logits = topk_logits/args.temp
+            e_loss = softmax_entropy(topk_logits, dim=1)
+            if 'weighted' in args.objective_f:
+                e_loss = (1/(1+args.alpha*torch.exp(-e_loss))) * e_loss
+            e_loss = e_loss.mean()
+            loss += e_loss
+
+        if 'c_loss' in args.objective_f:
+            c_loss = mcc_loss(topk_logits, dim=1, class_num=args.topk)
+            loss = loss * args.em_coef + c_loss * (1 - args.em_coef)
+
+        if 'p_loss' in args.objective_f and teacher_token_list is not None:
+            if teacher_token_list is None:
+                with torch.no_grad():
+                    teacher_token_list = self.decode(inputs, forced_decoder_ids=forced_decoder_ids)
+            criterion = nn.CrossEntropyLoss()
+            outputs = self(input_features=inputs, decoder_input_ids=teacher_token_list[:, :-1])
+            p_loss = criterion(outputs.logits[0], teacher_token_list[0,1:])
+            loss += p_loss
+
+        loss.backward()
+        optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
+        output = generated_ids
+        if generate_text:
+            with torch.no_grad():
+                output = self.decode(inputs, forced_decoder_ids=forced_decoder_ids)
+        
+        return output, loss.detach().cpu(), e_loss, p_loss
+
+
 
 class TTADecode(whisper.decoding.DecodingTask):
     '''
@@ -429,13 +585,20 @@ def forward_and_adapt(x, model, optimizer, em_coef=0.9, reweight=False, temp=1.,
 
 
 class transcriptionProcessor:
-    def __init__(self):
-        self.data = self._initialize_lists()
+    def __init__(self, task='translate'):
+        self.task = task
+        self.data = self._initialize_lists(task)
 
-    def _initialize_lists(self):
+    def _initialize_lists(self, task):
+        if task == 'transcribe':
+            return {
+                'ori_wers': [], 'ori_transcription': [], 'labels': [],
+                **{f'wer_{i}': [] for i in [0, 3, 6, 9, 12, 14, 18, 20]},
+                **{f'transcriptions_{i}': [] for i in [0, 3, 6, 9, 12, 14, 18, 20]}
+            }
         return {
-            'ori_wers': [], 'ori_transcription': [], 'labels': [],
-            **{f'wer_{i}': [] for i in [0, 3, 6, 9, 12, 14, 18, 20]},
+            'ori_bleus': [], 'ori_transcription': [], 'labels': [],
+            **{f'bleu_{i}': [] for i in [0, 3, 6, 9, 12, 14, 18, 20]},
             **{f'transcriptions_{i}': [] for i in [0, 3, 6, 9, 12, 14, 18, 20]}
         }
 
@@ -453,22 +616,38 @@ class transcriptionProcessor:
         value, sentence = self.parse_line(line)
         if value is None:
             return
-
-        if line.startswith('ori'):
-            self.data['ori_wers'].append(value)
-            self.data['ori_transcription'].append(sentence)
-        elif line.startswith('label'):
-            self.data['labels'].append(sentence)
+        if self.task == 'transcribe':
+            if line.startswith('ori'):
+                self.data['ori_wers'].append(value)
+                self.data['ori_transcription'].append(sentence)
+            elif line.startswith('label'):
+                self.data['labels'].append(sentence)
+            else:
+                step = re.search(r'step(\d+)', line)
+                if step:
+                    step = int(step.group(1))
+                    if step in [0, 3, 6, 9, 12, 14, 18, 21]:
+                        key = step
+                        self.data[f'wer_{key}'].append(value)
+                        self.data[f'transcriptions_{key}'].append(sentence)
+                    elif step in [24, 27, 30, 33, 36, 39]:
+                        self.data[f'wer_{step}'].append(value)
         else:
-            step = re.search(r'step(\d+)', line)
-            if step:
-                step = int(step.group(1))
-                if step in [0, 3, 6, 9, 12, 14, 18, 21]:
-                    key = step
-                    self.data[f'wer_{key}'].append(value)
-                    self.data[f'transcriptions_{key}'].append(sentence)
-                elif step in [24, 27, 30, 33, 36, 39]:
-                    self.data[f'wer_{step}'].append(value)
+            if line.startswith('ori'):
+                self.data['ori_bleus'].append(value)
+                self.data['ori_transcription'].append(sentence)
+            elif line.startswith('label'):
+                self.data['labels'].append(sentence)
+            else:
+                step = re.search(r'step(\d+)', line)
+                if step:
+                    step = int(step.group(1))
+                    if step in [0, 3, 6, 9, 12, 14, 18, 21]:
+                        key = step
+                        self.data[f'bleu_{key}'].append(value)
+                        self.data[f'transcriptions_{key}'].append(sentence)
+                    elif step in [24, 27, 30, 33, 36, 39]:
+                        self.data[f'bleu_{step}'].append(value)
 
     def process_file(self, file_path):
         with open(file_path, 'r') as file:
@@ -476,18 +655,25 @@ class transcriptionProcessor:
                 self.process_line(line)
 
     def step_mean_wer(self):
-        mean_wer_list = [f'ori_wers: {np.array(self.data["ori_wers"]).mean() * 100:.2f}%']
-        for key in [f'wer_{i}' for i in [0, 3, 6, 9, 12, 14, 18, 20]]:
-            try:
-                mean_wer_list.append(f'{key}: {np.array(self.data[key]).mean() * 100:.2f}%')
-            except:
-                pass
+        if self.task == 'transcribe':
+            mean_wer_list = [f'ori_wers: {np.array(self.data["ori_wers"]).mean() * 100:.2f}%']
+            for key in [f'wer_{i}' for i in [0, 3, 6, 9, 12, 14, 18, 20]]:
+                try:
+                    mean_wer_list.append(f'{key}: {np.array(self.data[key]).mean() * 100:.2f}%')
+                except:
+                    pass
+        else:
+            mean_wer_list = [f'ori_bleus: {np.array(self.data["ori_bleus"]).mean() * 100:.2f}%']
+            for key in [f'bleu_{i}' for i in [0, 3, 6, 9, 12, 14, 18, 20]]:
+                try:
+                    mean_wer_list.append(f'{key}: {np.array(self.data[key]).mean() * 100:.2f}%')
+                except:
+                    pass
         return mean_wer_list
 
     def get_data(self):
         return self.data
 
-from transformers import WhisperForConditionalGeneration
 def hf_collect_params(model):
     params, names = [], []
     for param in model.parameters():
@@ -506,154 +692,4 @@ def hf_collect_params(model):
 
     return params, names
 
-class WhisperTTADecoder(WhisperForConditionalGeneration):
-    def decode(self, inputs, max_length=64, num_beams=1, do_sample=False, temperature=1.0, forced_decoder_ids=None, **generation_args):
-        """
-        Decoding function that supports Greedy, Sampling, and Beam Search decoding strategies.
-        Arguments:
-            inputs: Tensor, the input features for Whisper model.
-            max_length: int, the maximum number of tokens to generate.
-            num_beams: int, the number of beams for beam search. Set to 1 for greedy or sampling decoding.
-            do_sample: bool, whether to use sampling decoding. Set to True to enable sampling.
-            temperature: float, used for controlling randomness in sampling decoding.
-        """
-        if num_beams > 1:
-            # Beam Search Decoding
-            return self._beam_search_decode(inputs, max_length, num_beams, forced_decoder_ids)
-        elif do_sample:
-            # Sampling Decoding
-            return self._sample_decode(inputs, max_length, temperature, forced_decoder_ids)
-        else:
-            # Greedy Decoding
-            return self._greedy_decode(inputs, max_length, forced_decoder_ids)
-    
-    def _greedy_decode(self, inputs, max_length, forced_decoder_ids, **generation_args):
-        """
-        Greedy decoding implementation.
-        """
-        generated_ids = torch.tensor([[self.config.decoder_start_token_id]], device=inputs.device)
-        if forced_decoder_ids:
-            forced_token_ids = torch.tensor([token_id for _, token_id in forced_decoder_ids], device=inputs.device).unsqueeze(0)
-            generated_ids = torch.cat([generated_ids, forced_token_ids], dim=1)
-        for _ in range(max_length):
-            outputs = self(input_features=inputs, decoder_input_ids=generated_ids)
-            next_token_logits = outputs.logits[:, -1, :]
-            next_token = next_token_logits.argmax(dim=-1, keepdim=True)
-            
-            generated_ids = torch.cat((generated_ids, next_token), dim=1)
-            if next_token.item() == self.config.eos_token_id:
-                break
-        return generated_ids
 
-    def _sample_decode(self, inputs, max_length, temperature, forced_decoder_ids):
-        """
-        Sampling decoding implementation.
-        """
-        generated_ids = torch.tensor([[self.config.decoder_start_token_id]], device=inputs.device)
-        if forced_decoder_ids:
-            forced_token_ids = torch.tensor([token_id for _, token_id in forced_decoder_ids], device=inputs.device).unsqueeze(0)
-            generated_ids = torch.cat([generated_ids, forced_token_ids], dim=1)
-        for _ in range(max_length):
-            outputs = self(input_features=inputs, decoder_input_ids=generated_ids)
-            next_token_logits = outputs.logits[:, -1, :]
-            
-            # Apply temperature for sampling
-            next_token_logits = next_token_logits / temperature
-            next_token_probs = torch.softmax(next_token_logits, dim=-1)
-            
-            # Sample the next token
-            next_token = torch.multinomial(next_token_probs, num_samples=1)
-            generated_ids = torch.cat((generated_ids, next_token), dim=1)
-            if next_token.item() == self.config.eos_token_id:
-                break
-        return generated_ids
-
-    def _beam_search_decode(self, inputs, max_length, num_beams, forced_decoder_ids):
-        """
-        Beam search decoding implementation.
-        """
-        beam_sequences = [torch.tensor([[self.config.decoder_start_token_id]], device=inputs.device) for _ in range(num_beams)]
-        beam_scores = torch.zeros(num_beams, device=inputs.device)
-        if forced_decoder_ids:
-            forced_token_ids = torch.tensor([token_id for _, token_id in forced_decoder_ids], device=inputs.device).unsqueeze(0)
-            beam_sequences = [torch.cat([seq, forced_token_ids], dim=1) for seq in beam_sequences]
-
-        for _ in range(max_length):
-            all_candidates = []
-            for i in range(num_beams):
-                outputs = self(input_features=inputs, decoder_input_ids=beam_sequences[i])
-                next_token_logits = outputs.logits[:, -1, :]
-                next_token_probs = torch.softmax(next_token_logits, dim=-1)
-
-                top_k_probs, top_k_tokens = torch.topk(next_token_probs, num_beams, dim=-1)
-                for k in range(num_beams):
-                    candidate = torch.cat([beam_sequences[i], top_k_tokens[:, k].unsqueeze(-1)], dim=1)
-                    candidate_score = beam_scores[i] + torch.log(top_k_probs[:, k])
-                    all_candidates.append((candidate_score, candidate))
-
-            ordered = sorted(all_candidates, key=lambda x: x[0], reverse=True)
-            beam_sequences = [seq for _, seq in ordered[:num_beams]]
-            beam_scores = torch.tensor([score for score, _ in ordered[:num_beams]], device=inputs.device)
-
-            if all(seq[0, -1] == self.config.eos_token_id for seq in beam_sequences):
-                break
-
-        best_sequence = beam_sequences[0]
-        return best_sequence
-    
-    def AED_suta(self, inputs, args, optimizer, scheduler=None, teacher_token_list=None, max_length=100, generate_text=False, forced_decoder_ids=None, **generation_args):
-        """
-        SUTA algorithm that implement test-time adaptation (TTA) to single utterence.
-        """
-        optimizer.zero_grad()
-        loss = 0
-        e_loss = 0
-        p_loss = 0
-        num_suta_token = 0
-        e_loss_list = []
-        generated_ids = torch.tensor([[self.config.decoder_start_token_id]], device=inputs.device)
-        if forced_decoder_ids:
-            forced_token_ids = torch.tensor([token_id for _, token_id in forced_decoder_ids], device=inputs.device).unsqueeze(0)
-            generated_ids = torch.cat([generated_ids, forced_token_ids], dim=1)
-        
-        if teacher_token_list is None:
-            with torch.no_grad():
-                teacher_token_list = self.decode(inputs)
-        for _ in range(len(teacher_token_list[0])-4):
-            num_suta_token+=1
-            outputs = self(input_features=inputs, decoder_input_ids=generated_ids)
-            next_token_logits = outputs.logits[:, -1, :]
-            next_token = next_token_logits.argmax(dim=-1, keepdim=True)
-            # Append the predicted next token
-            generated_ids = torch.cat((generated_ids, next_token), dim=1)
-
-        topk_logits = torch.topk(outputs.logits, k=args.topk).values.squeeze(0)
-        # Don't calculate tag token entropy
-        topk_logits = topk_logits[4:, :]
-        topk_logits = topk_logits/args.temp
-        e_loss = softmax_entropy(topk_logits, dim=1)
-        if 'weighted' in args.objective_f:
-            e_loss = (1/(1+args.alpha*torch.exp(-e_loss))) * e_loss
-
-        loss = e_loss.mean()
-        if 'c_loss' in args.objective_f:
-            c_loss = mcc_loss(topk_logits, dim=1, class_num=args.topk)
-            loss = loss * args.em_coef + c_loss * (1 - args.em_coef)
-        if 'p_loss' in args.objective_f and teacher_token_list is not None:
-            criterion = nn.CrossEntropyLoss()
-            try:
-                p_loss = criterion(outputs.logits[0], teacher_token_list[0,1:])
-            except:
-                print(outputs.logits[0].shape)
-                print(teacher_token_list[0,1:].shape)
-            loss += p_loss
-        loss.backward()
-        optimizer.step()
-        if scheduler is not None:
-            scheduler.step()
-        output = generated_ids
-        if generate_text:
-            with torch.no_grad():
-                output = self.decode(inputs)
-        
-        return output, loss, e_loss, p_loss

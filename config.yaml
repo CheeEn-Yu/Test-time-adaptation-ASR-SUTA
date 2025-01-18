@@ -27,7 +27,7 @@ lr_min: 1e-4
 noise_dir: Gaussian # only for multilibri, currently supported: null, ../res 
 snr: 10 # only for multilibri
 dataset_name: covost2  # ['librispeech', 'noisylibri', 'multilibri'] for self-define noisy Librispeech (English only), use noisylibri
-dataset_dir: ../TTA_data/covost2_nl  # for multi librispeech dataset, this is lang: ['dutch', 'french', 'german', 'italian', 'polish', 'portuguese', 'spanish']
+dataset_dir: ../TTA_LAS/covost2_nl  # for multi librispeech dataset, this is lang: ['dutch', 'french', 'german', 'italian', 'polish', 'portuguese', 'spanish']
 lang: nl  # ['nl', 'fr', 'de', 'it', 'pl', 'pt', 'es'], reference: https://github.com/openai/whisper/blob/main/whisper/tokenizer.py
 batch_size: 1
 

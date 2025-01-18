@@ -119,7 +119,7 @@ def main(args):
 
             f.write("=======================================\n")
 
-    processor = transcriptionProcessor()
+    processor = transcriptionProcessor(task=args.task)
     processor.process_file(f'{args.exp_name}/result.txt')
     wer_list = processor.step_mean_wer()
     with open(f'{args.exp_name}/log.txt', 'a') as f:
