@@ -51,11 +51,13 @@ def main(args):
             label = normalizer(texts[0])
             f.write('label:'+label+'\n')
             # load model
-            processor = AutoProcessor.from_pretrained(args.asr)
-            model = WhisperTTADecoder.from_pretrained(args.asr, device_map='auto')
-            forced_decoder_ids = processor.get_decoder_prompt_ids(language=args.lang, task=args.task)
+            if count == 0 or args.tta== True:
+                processor = AutoProcessor.from_pretrained(args.asr)
+                model = WhisperTTADecoder.from_pretrained(args.asr, device_map='auto')
+                forced_decoder_ids = processor.get_decoder_prompt_ids(language=args.asr_lang, task=args.task)
 
-            params, names = hf_collect_params(model)
+                params, names = hf_collect_params(model)
+                optimizer, scheduler = setup_optimizer(args, params, args.opt, args.lr, weight_decay=1e-5, scheduler=args.scheduler)
 
             if count == 0:
                 import pprint
@@ -70,7 +72,6 @@ def main(args):
                     print(f'train_param ratio: {train_ratio}')
                     logfile.write(f'train_param ratio: {train_ratio}\n')
                 
-            optimizer, scheduler = setup_optimizer(args, params, args.opt, args.lr, weight_decay=1e-5, scheduler=args.scheduler)
             inputs = processor(wavs[0],sampling_rate=16000, return_tensors="pt")
             input_features = inputs.input_features.to(model.device)
 
@@ -81,43 +82,44 @@ def main(args):
             ori_wer = wer(label, transcription) if args.task == "transcribe" else sentence_bleu([label], transcription)
             f.write(f'ori({ori_wer:.5f}):{transcription}\n')
 
-            # Start TTA
-            for step in range(args.steps):
-                if step % 3 == 0 or step == args.steps-1:
-                    outputs, loss, e_loss, p_loss = model.AED_suta(input_features, args, optimizer, teacher_token_list=teacher_token_list, forced_decoder_ids=forced_decoder_ids, generate_text=True)
-                    transcription = processor.batch_decode(outputs, skip_special_tokens=True)[0]
-                    transcription = normalizer(transcription)
-                    adapt_wer = wer(label, transcription) if args.task == "transcribe" else sentence_bleu([label], transcription)
-                    f.write(f'step{step}({adapt_wer:.5f}): {transcription}\n')
-                else:
-                    outputs, loss, e_loss, p_loss = model.AED_suta(input_features, args, optimizer, teacher_token_list=teacher_token_list, forced_decoder_ids=forced_decoder_ids)
-                try:
-                    step_loss.append(loss.item())
-                    p_loss_list.append(p_loss.item())
-                except:
-                    step_loss.append(loss)
-                    p_loss_list.append(p_loss)
+            if args.tta:
+                # Start TTA
+                for step in range(args.steps):
+                    if step % 3 == 0 or step == args.steps-1:
+                        outputs, loss, e_loss, p_loss = model.AED_suta(input_features, args, optimizer, teacher_token_list=teacher_token_list, forced_decoder_ids=forced_decoder_ids, generate_text=True)
+                        transcription = processor.batch_decode(outputs, skip_special_tokens=True)[0]
+                        transcription = normalizer(transcription)
+                        adapt_wer = wer(label, transcription) if args.task == "transcribe" else sentence_bleu([label], transcription)
+                        f.write(f'step{step}({adapt_wer:.5f}): {transcription}\n')
+                    else:
+                        outputs, loss, e_loss, p_loss = model.AED_suta(input_features, args, optimizer, teacher_token_list=teacher_token_list, forced_decoder_ids=forced_decoder_ids)
+                    try:
+                        step_loss.append(loss.item())
+                        p_loss_list.append(p_loss.item())
+                    except:
+                        step_loss.append(loss)
+                        p_loss_list.append(p_loss)
 
 
-            # 10 loss figure
-            fig0, ax0 = plt.subplots(1,1)
-            color = 'tab:red'
-            ax0.set_xlabel('step')
-            ax0.set_ylabel('loss', color=color)
-            ax0.plot([loss for loss in step_loss], color=color, marker='o')
-            ax0.tick_params(axis='y', labelcolor=color)
+                # 10 loss figure
+                fig0, ax0 = plt.subplots(1,1)
+                color = 'tab:red'
+                ax0.set_xlabel('step')
+                ax0.set_ylabel('loss', color=color)
+                ax0.plot([loss for loss in step_loss], color=color, marker='o')
+                ax0.tick_params(axis='y', labelcolor=color)
 
-            ax2 = ax0.twinx()  # 共享 x 軸
-            color = 'tab:blue'
-            ax2.set_xlabel('step')
-            ax2.set_ylabel('p_loss', color=color)
-            ax2.plot([i for i in p_loss_list], color=color, marker='o')
-            ax2.tick_params(axis='y', labelcolor=color)
-            plt.title(f'idx:{count}')
-            plt.savefig(f'{args.exp_name}/figs/suta_{count}.png')
-            plt.close()
+                ax2 = ax0.twinx()  # 共享 x 軸
+                color = 'tab:blue'
+                ax2.set_xlabel('step')
+                ax2.set_ylabel('p_loss', color=color)
+                ax2.plot([i for i in p_loss_list], color=color, marker='o')
+                ax2.tick_params(axis='y', labelcolor=color)
+                plt.title(f'idx:{count}')
+                plt.savefig(f'{args.exp_name}/figs/suta_{count}.png')
+                plt.close()
 
-            f.write("=======================================\n")
+                f.write("=======================================\n")
 
     processor = transcriptionProcessor(task=args.task)
     processor.process_file(f'{args.exp_name}/result.txt')

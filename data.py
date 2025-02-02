@@ -89,13 +89,28 @@ def create_dataset(split, name, path, batch_size=1, **kwargs):
     return dataset, loader_bs
 
 
-def load_SUTAdataset(split=None, name='librispeech', path=None, batch_size=1, extra_noise=0., num_workers=4, noise_dir=None, snr=0., lang="en"):
+def load_SUTAdataset(split=None, name='librispeech', path=None, batch_size=1, extra_noise=0., num_workers=4, noise_dir=None, snr=0., lang="en", **distributed_args):
     ''' Prepare dataloader for training/validation'''
     dataset, loader_bs = create_dataset(split, name, path, batch_size, noise_dir=noise_dir, snr=snr, lang=lang)
     collate_fn = None
     if name.lower() != 'multilibri' and name.lower() != 'covost2':
         collate_fn = partial(collect_audio_batch, extra_noise=extra_noise)
 
-    dataloader = DataLoader(dataset, batch_size=loader_bs, shuffle=False,
-                            collate_fn=collate_fn, num_workers=num_workers)
+    # Create DistributedSampler
+    if distributed_args:
+        sampler = torch.utils.data.distributed.DistributedSampler(
+            dataset,
+            num_replicas=distributed_args['world_size'],
+            rank=distributed_args['rank'],
+            shuffle=False
+        )
+
+    dataloader = DataLoader(
+        dataset,
+        batch_size=loader_bs, 
+        shuffle=False,
+        collate_fn=collate_fn, 
+        num_workers=num_workers, 
+    )
+         
     return dataloader

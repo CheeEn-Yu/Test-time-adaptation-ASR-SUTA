@@ -1,258 +1,147 @@
 import os
-import argparse
-import numpy as np
-import pandas as pd
+import matplotlib.pyplot as plt
 import torch
-import torchaudio
-import torch.nn.functional as F
-from torch import nn
+import hydra
+# import evaluate
+from jiwer import wer
+from omegaconf import OmegaConf
+from whisper.normalizers import EnglishTextNormalizer
+from datetime import datetime
 
 import whisper
 from whisper.audio import (
     log_mel_spectrogram,
     pad_or_trim,
 )
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 from tqdm import tqdm
 from suta import *
+from data import *
+# from timeit import default_timer
 
-seed = 42
-torch.backends.cudnn.deterministic = True
-torch.backends.cudnn.benchmark = False
-torch.manual_seed(seed)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed_all(seed)
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+@hydra.main(version_base=None, config_path=".", config_name="config")
+def main(args):
+    seed = args.seed
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+    if args.task == "translation":
+        smoothing_function = SmoothingFunction().method1
+    #     bleu = evaluate.load('bleu')
+    normalizer = EnglishTextNormalizer()
+    
+    dataset = load_SUTAdataset(name=args.dataset_name, path=args.dataset_dir, batch_size=1, lang=args.lang, noise_dir=args.noise_dir, snr=args.snr)
+    os.makedirs(args.exp_name, exist_ok=True)
+    os.makedirs(f'{args.exp_name}/figs', exist_ok=True)
+    config_str = OmegaConf.to_yaml(args)
+    with open(f'{args.exp_name}/log.txt', 'w') as f:
+        now = datetime.now()
+        current_time = now.strftime("%Y-%m-%d %H:%M:%S")
+        f.write(f'start time: {current_time}\n')
+        f.write(config_str)
+
+    with open(f'{args.exp_name}/result.txt', 'a') as f:
+        for count, batch in tqdm(enumerate(dataset)):
+
+            if args.num_data:
+                if count > args.num_data:
+                    break
+
+            model = whisper.load_model(args.asr).to(DEVICE)
+            params, names = whisper_collect_params(model, args.encoderLN, args.decoderLN, train_feature=args.train_feature)
+            options = whisper.DecodingOptions(language=args.lang, without_timestamps=True, task=args.task)
+            c_loss_list, p_loss_list, step_loss, wers = [], [], [], []
+            lens, wavs, texts, files = batch
+            f.write(f'idx:{count}'+'\n')
+            f.write('label:'+normalizer(texts[0])+'\n')
+            model.eval()
+            if args.asr == 'large' or args.asr == 'large_v2' or args.asr == 'large_v3':
+                mel = log_mel_spectrogram(pad_or_trim(wavs[0]), n_mels=128).unsqueeze(0)
+            else:
+                if args.dataset_name.lower() == "multilibri" or args.dataset_name.lower() == "covost2":
+                    mel = log_mel_spectrogram(pad_or_trim(wavs[0].float())).unsqueeze(0)
+                else:
+                    mel = log_mel_spectrogram(pad_or_trim(wavs[0])).unsqueeze(0)
+            mel = mel.to(DEVICE)
+            if count == 0:
+                import pprint
+                with open(f'{args.exp_name}/log.txt', 'a') as logfile:
+                    pp = pprint.PrettyPrinter(stream=logfile)
+                    pp.pprint(names)
+                    total_params = sum(
+                        param.numel() for param in model.parameters()
+                    )
+                    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+                    train_ratio = trainable_params / total_params
+                    print(f'train_param ratio: {train_ratio}')
+                    logfile.write(f'train_param ratio: {train_ratio}\n')
+                
+            optimizer, scheduler = setup_optimizer(args, params, args.opt, args.lr, weight_decay=1e-4, scheduler=args.scheduler)
+            decode_obj = TTADecode(model, options)
+
+            # get words before TTA
+            with torch.no_grad():
+                label = normalizer(texts[0]) if args.lang == "en" or args.task == "translation" else texts[0]
+                if len(label) == 0:
+                    continue
+                _, ori_text = decode_obj.run(mel, max_decoder_step=args.max_decoder_step)
+                ori_text = normalizer(ori_text[0]) if args.lang == "en" or args.task == "translation" else ori_text[0]
+                # ori_wer = wer(label, ori_text) if args.task == "transcribe" else bleu.compute(references=[label], predictions=[ori_text])['bleu']
+                ori_wer = wer(label, ori_text) if args.task == "transcribe" else sentence_bleu([label], ori_text, smoothing_function=smoothing_function)
+
+                wers.append(ori_wer)
+                f.write(f'ori({ori_wer:2f}):{ori_text}\n')
+
+            # Start TTA
+            for step in range(args.steps):
+                if step % 3 == 0 or step == args.steps-1:
+                    adapt_text, loss, c_loss, p_loss = decode_obj.adapt(mel, args, optimizer, scheduler, generate_text=True)
+                    adapt_text = normalizer(adapt_text[0]) if args.lang == "en" or args.task == "translation" else adapt_text[0]
+                    # adapt_wer = wer(label, adapt_text) if args.task == "transcribe" else bleu.compute(references=[label], predictions=[adapt_text])['bleu']
+                    adapt_wer = wer(label, adapt_text) if args.task == "transcribe" else sentence_bleu([label], adapt_text, smoothing_function=smoothing_function)
+                    wers.append(adapt_wer)
+                    f.write(f'step{step}({adapt_wer}): {adapt_text}\n')
+                else:
+                    adapt_text, loss, c_loss, p_loss = decode_obj.adapt(mel, args, optimizer, scheduler)
+                step_loss.append(loss)
+                c_loss_list.append(c_loss)
+                p_loss_list.append(p_loss)
+
+            # 10 loss figure
+            if count < 5 or count >2930:
+                fig0, ax0 = plt.subplots(1,1)
+                color = 'tab:red'
+                ax0.set_xlabel('step')
+                ax0.set_ylabel('loss', color=color)
+                ax0.plot([loss for loss in step_loss], color=color, marker='o')
+                ax0.tick_params(axis='y', labelcolor=color)
+
+                ax2 = ax0.twinx()  # 共享 x 軸
+                color = 'tab:blue'
+                ax2.set_xlabel('step')
+                ax2.set_ylabel('c_loss', color=color)
+                ax2.plot([i for i in c_loss_list], color=color, marker='o')
+                ax2.tick_params(axis='y', labelcolor=color)
+                plt.title(f'idx:{count}')
+                plt.savefig(f'{args.exp_name}/figs/suta_{count}.png')
+                plt.close()
+
+            f.write("=======================================\n")
+
+    processor = transcriptionProcessor()
+    processor.process_file(f'{args.exp_name}/result.txt')
+    wer_list = processor.step_mean_wer()
+    with open(f'{args.exp_name}/log.txt', 'a') as f:
+        now = datetime.now()
+        current_time = now.strftime("%Y-%m-%d %H:%M:%S")
+        f.write(f'end time: {current_time}\n')
+        for log_wer in wer_list:
+            f.write(log_wer)
+            f.write('\n')
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description="TTA ASR")
-    parser.add_argument('--asr', type=str, default="facebook/wav2vec2-base-960h")
-    parser.add_argument('--task', type=str, default="transcription")
-    parser.add_argument('--lang', type=str, default="pt")
-    parser.add_argument('--steps', type=int, default=10)
-    parser.add_argument('--episodic', action='store_true')
-    parser.add_argument('--div_coef', type=float, default=0.)
-    parser.add_argument('--opt', type=str, default='AdamW')
-    parser.add_argument('--dataset_name', type=str, default='librispeech')
-    parser.add_argument('--dataset_dir', type=str, default='/home/daniel094144/data/LibriSpeech')
-    parser.add_argument('--split', default=['test-other'])
-    parser.add_argument('--lr', type=float, default=1e-4)
-    parser.add_argument('--em_coef', type=float, default=1.)
-    parser.add_argument('--reweight', action='store_true')
-    parser.add_argument('--bias_only', action='store_true')
-    parser.add_argument('--train_feature', action='store_true')
-    parser.add_argument('--train_all', action='store_true')
-    parser.add_argument('--is_whisper', action=argparse.BooleanOptionalAction)
-    parser.add_argument('--encoderLN', action=argparse.BooleanOptionalAction)
-    parser.add_argument('--decoderLN', action=argparse.BooleanOptionalAction)
-    parser.add_argument('--batch_size', type=int, default=1)
-    parser.add_argument('--temp', type=float, default=2.5)
-    parser.add_argument('--non_blank', action='store_true')
-    parser.add_argument('--log_dir', type=str, default='./exps')
-    parser.add_argument('--extra_noise', type=float, default=0.)
-    parser.add_argument('--scheduler', default=None)
-    parser.add_argument('--topk', type=int, default=0)
-    parser.add_argument('--beam_size', type=int, default=0)
-
-    args = parser.parse_args()
-    em_coef = args.em_coef
-    reweight = args.reweight
-    batch_size = args.batch_size
-    temp =  args.temp
-    non_blank = args.non_blank
-    extra_noise = args.extra_noise
-    scheduler = args.scheduler
-    div_coef = args.div_coef
-    train_feature = args.train_feature
-    is_whisper = args.is_whisper
-    skip_short_thd = None
-
-    # load models
-    model = whisper.load_model(args.asr)
-    params, names = whisper_collect_params(model, args.encoderLN, args.decoderLN, train_feature=train_feature)
-    optimizer, scheduler = setup_optimizer(params, args.opt, args.lr, scheduler=scheduler)
-
-    # load datasets and decide decoding option
-    print(f'[logger] - loading data...')
-    if args.task == 'translation':
-        from datasets import load_dataset
-        dataset = load_dataset("covost2", f'{args.lang}_en', data_dir=args.dataset_dir,split='test', trust_remote_code=True)
-        options = whisper.DecodingOptions(language=args.lang, task='translation', without_timestamps=True)
-
-    else:
-        from data import load_dataset
-        import jiwer
-        from whisper.normalizers import EnglishTextNormalizer
-        dataset = load_dataset(args.split, args.dataset_name, args.dataset_dir, batch_size, extra_noise)
-
-        if dataset_name == 'aishell3':
-            if args.beam_size == 0:
-                options = whisper.DecodingOptions(language="zh", prompt="简体", without_timestamps=True)
-            else:
-                options = whisper.DecodingOptions(language="zh", beam_size=args.beam_size,prompt="简体", without_timestamps=True)
-
-        elif args.beam_size == 0:
-            options = whisper.DecodingOptions(language="en", without_timestamps=True)
-        else:
-            options = whisper.DecodingOptions(language="en", beam_size=args.beam_size, without_timestamps=True)
-
-    data = pd.DataFrame()
-    ori_langs, ori_transcriptions, transcriptions_1, transcriptions_3, transcriptions_5, transcriptions_10, labels = [], [], [], [], [], [], []
-    model_state, optimizer_state, scheduler_state = copy_model_and_optimizer(model, optimizer, scheduler)
-    
-    print(f'[logger] - start training...')
-    try:
-        count = 0
-        if args.task == 'translation':
-            for batch in tqdm(dataset):
-                count+=1
-                ori_langs.append(batch['sentence'])
-                labels.append(batch['translation'])
-                if count > 1000:
-                    break
-                wavs = torch.Tensor(batch['audio']['array'])
-                if args.asr == 'large' or args.asr == 'large_v2' or args.asr == 'large_v3':
-                    mel = log_mel_spectrogram(pad_or_trim(wavs), n_mels=128).unsqueeze(0)
-                else:
-                    mel = log_mel_spectrogram(pad_or_trim(wavs)).unsqueeze(0)
-                model.eval()
-                with torch.no_grad():
-                    mel = mel.to(DEVICE)
-                    outputs = model.decode(mel, options)
-                ori_transcriptions.extend([result.text for result in outputs[0]])
-
-                model, optimizer, scheduler = load_model_and_optimizer(model, optimizer, scheduler, model_state, optimizer_state, scheduler_state)
-                model = model.to(DEVICE)
-                for i in range(args.steps):
-                    adapt_output = forward_and_adapt(mel, model, optimizer, em_coef, reweight, temp, non_blank, scheduler, div_coef,topk=args.topk, beam_size=args.beam_size, is_whisper=is_whisper, options=options)
-                    if i == 0:
-                        transcriptions_1.append(adapt_output[0][0].text)
-                    if i == 2:
-                        transcriptions_3.append(adapt_output[0][0].text)
-                    if i == 4:
-                        transcriptions_5.append(adapt_output[0][0].text)
-                    
-
-                transcriptions_10.append(adapt_output[0][0].text)
-                
-        else:
-            for batch in tqdm(dataset):
-                count+=1
-                if count > 1000:
-                    break
-                lens, wavs, texts, files = batch
-                # the code is for batch size = 1
-                labels.append(texts[0])
-                if args.asr == 'large' or args.asr == 'large_v2' or args.asr == 'largev3':
-                    mel = log_mel_spectrogram(pad_or_trim(wavs[0]), n_mels=128).unsqueeze(0).to(DEVICE)
-                else:
-                    mel = log_mel_spectrogram(pad_or_trim(wavs[0])).unsqueeze(0).to(DEVICE)
-
-                with torch.no_grad():
-                    ori_transcriptions.append(model.decode(mel, options)[0][0].text)
-                model, optimizer, scheduler = load_model_and_optimizer(model, optimizer, scheduler, model_state, optimizer_state, scheduler_state)
-                model = model.to(DEVICE)
-                for i in range(args.steps):
-                    adapt_output = forward_and_adapt(mel, model, optimizer, em_coef, reweight, temp, non_blank, scheduler, div_coef,topk=args.topk, beam_size=args.beam_size, is_whisper=is_whisper, options=options)
-                    if i == 0:
-                        transcriptions_1.append(adapt_output[0][0].text)
-                    if i == 2:
-                        transcriptions_3.append(adapt_output[0][0].text)
-                    if i == 4:
-                        transcriptions_5.append(adapt_output[0][0].text)
-                    
-
-                transcriptions_10.append(adapt_output[0][0].text)
-        del adapt_output
-        torch.cuda.empty_cache()
-    except Exception as e:
-        print("[logger] - error occurred:"+str(e))
-        try:
-            if args.task == 'translation':
-                data = pd.DataFrame(dict(before_adapt=ori_transcriptions,step1=transcriptions_1,step3=transcriptions_3,step5=transcriptions_5,step10=transcriptions_10, reference=labels, ori_lang=ori_langs))
-            else:
-                data = pd.DataFrame(dict(before_adapt=ori_transcriptions,step1=transcriptions_1,step3=transcriptions_3,step5=transcriptions_5,step10=transcriptions_10, reference=labels))
-        except:
-            max_length = max(len(ori_transcriptions), len(transcriptions_1), len(transcriptions_3), len(transcriptions_5), len(transcriptions_10), len(labels))
-            ori_transcriptions += ['oom_pad'] * (max_length - len(ori_transcriptions))
-            transcriptions_1 += ['oom_pad'] * (max_length - len(transcriptions_1))
-            transcriptions_3 += ['oom_pad'] * (max_length - len(transcriptions_3))
-            transcriptions_5 += ['oom_pad'] * (max_length - len(transcriptions_5))
-            transcriptions_10 += ['oom_pad'] * (max_length - len(transcriptions_10))
-            labels += ['oom_pad'] * (max_length - len(labels))
-            if args.task == 'translation':
-                ori_langs += ['oom_pad'] * (max_length - len(ori_transcriptions))
-                data = pd.DataFrame(dict(before_adapt=ori_transcriptions,step1=transcriptions_1,step3=transcriptions_3,step5=transcriptions_5,step10=transcriptions_10, reference=labels, ori_lang=ori_langs))
-            else:
-                data = pd.DataFrame(dict(before_adapt=ori_transcriptions,step1=transcriptions_1,step3=transcriptions_3,step5=transcriptions_5,step10=transcriptions_10, reference=labels))
-
-    if data.empty:
-        data = pd.DataFrame(dict(before_adapt=ori_transcriptions,step1=transcriptions_1,step3=transcriptions_3,step5=transcriptions_5,step10=transcriptions_10, reference=labels))
-    
-    exp_name = args.asr+'_'+args.dataset_name+'_temp_'+str(args.temp)+'_noise_'+str(args.extra_noise)+'_lr_'+str(args.lr)+'_EMcoef_'+str(args.em_coef)+'_trainFeature_'+str(args.train_feature)+'_encoderLN_'+str(args.encoderLN)+'_decoderLN_'+str(args.decoderLN)+'_topk_'+str(args.topk)+'_beam_'+str(args.beam_size)
-    if args.task == 'translation':
-        exp_name = args.task+'_'+args.lang+'_'+ exp_name
-
-        # calculate BLEU scores
-        import nltk
-        scores = []
-        ori_scores = []
-        scores1 = []
-        scores3 = []
-        scores5 = []
-        scores10 = []
-        for i in range(len(transcriptions_1)):
-            ori_scores.append(nltk.translate.bleu_score.sentence_bleu([word for word in labels[i].split(' ')], [word for word in ori_transcriptions[i].split(' ')]))
-            scores1.append(nltk.translate.bleu_score.sentence_bleu([word for word in labels[i].split(' ')], [word for word in transcriptions_1[i].split(' ')]))
-            scores3.append(nltk.translate.bleu_score.sentence_bleu([word for word in labels[i].split(' ')], [word for word in transcriptions_3[i].split(' ')]))
-            scores5.append(nltk.translate.bleu_score.sentence_bleu([word for word in labels[i].split(' ')], [word for word in transcriptions_5[i].split(' ')]))
-            scores10.append(nltk.translate.bleu_score.sentence_bleu([word for word in labels[i].split(' ')], [word for word in transcriptions_10[i].split(' ')]))
-        scores.append(np.array(ori_scores).mean())
-        scores.append(np.array(scores1).mean())
-        scores.append(np.array(scores3).mean())
-        scores.append(np.array(scores5).mean())
-        scores.append(np.array(scores10).mean())
-        with open(f"bleu_{exp_name}.txt", 'w') as f:
-            for i in scores:
-                f.write(f'BLEU: {i}'+'\n')
-
-    elif args.dataset_name == 'aishell3':
-        import cn2an
-        from opencc import OpenCC
-        cc = OpenCC('t2s')
-        data["before_adapt_clean"] = [cn2an.transform(cc.convert(text) ,"an2cn") for text in data["before_adapt"]]
-        data["step1_clean"] = [cn2an.transform(cc.convert(text) ,"an2cn") for text in data["step1"]]
-        data["step3_clean"] = [cn2an.transform(cc.convert(text) ,"an2cn") for text in data["step3"]]
-        data["step5_clean"] = [cn2an.transform(cc.convert(text) ,"an2cn") for text in data["step5"]]
-        data["step10_clean"] = [cn2an.transform(cc.convert(text) ,"an2cn") for text in data["step10"]]
-        cer_list = []
-        cer_list.append(jiwer.cer(list(data["reference_clean"]), list(data["before_adapt_clean"])))
-        cer_list.append(jiwer.cer(list(data["reference_clean"]), list(data["step1_clean"])))
-        cer_list.append(jiwer.cer(list(data["reference_clean"]), list(data["step3_clean"])))
-        cer_list.append(jiwer.cer(list(data["reference_clean"]), list(data["step5_clean"])))
-        cer_list.append(jiwer.cer(list(data["reference_clean"]), list(data["step10_clean"])))
-        with open(f"wer_{exp_name}.txt", 'w') as f:
-            for i in cer_list:
-                f.write(f'CER: {i}'+'\n')
-    else:
-        normalizer = EnglishTextNormalizer()
-        data["before_adapt_clean"] = [normalizer(text) for text in data["before_adapt"]]
-        data["step1_clean"] = [normalizer(text) for text in data["step1"]]
-        data["step3_clean"] = [normalizer(text) for text in data["step3"]]
-        data["step5_clean"] = [normalizer(text) for text in data["step5"]]
-        data["step10_clean"] = [normalizer(text) for text in data["step10"]]
-        data["reference_clean"] = [normalizer(text) for text in data["reference"]]
-        wer_list = []
-        wer_list.append(jiwer.wer(list(data["reference_clean"]), list(data["before_adapt_clean"])))
-        wer_list.append(jiwer.wer(list(data["reference_clean"]), list(data["step1_clean"])))
-        wer_list.append(jiwer.wer(list(data["reference_clean"]), list(data["step3_clean"])))
-        wer_list.append(jiwer.wer(list(data["reference_clean"]), list(data["step5_clean"])))
-        wer_list.append(jiwer.wer(list(data["reference_clean"]), list(data["step10_clean"])))
-
-        with open(f"wer_{exp_name}.txt", 'w') as f:
-            for i in wer_list:
-                f.write(f'WER: {i}'+'\n')
-
-    data.to_csv(f'{exp_name}.csv')
-    print(f'[logger] - finish the exp:\n{exp_name}')
-    
+    main()

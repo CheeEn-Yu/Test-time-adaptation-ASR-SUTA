@@ -1,18 +1,20 @@
-exp_name: ex_data/0103_nl_translate_Gaussian
+exp_name: False
+tta: true
 task: translate # ["transcribe", "translation"]
 topk: 30  # the dimension be calculated entropy
 alpha: 10 # the power of weighted, larger => higher entropy token accounts more
 train_params: [feature, LN] # currently supported: feature -> CNN bias, LN (both encoder and decoder), ...
 objective_f: [e_loss, weighted, p_loss]     # [e_loss, c_loss, p_loss, weighted]
 steps: 10
-asr: openai/whisper-medium
+asr: openai/whisper-tiny
+asr_lang: nl
 train_feature: true
 encoderLN: true
 decoderLN: true
 allEncoder: false
 repeat_penal: false
 max_decoder_step: 128 # lower if OOM
-num_data: 100 # False represent all data, set num_data for rapid test
+num_data: 50 # False represent all data, set num_data for rapid test
 ### optimizer & train hyparameters & learning rate scheduler
 opt: AdamW
 episodic: true # load pretrained model again for every batch
