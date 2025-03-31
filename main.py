@@ -12,6 +12,7 @@ from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 from tqdm import tqdm
 from suta import *
 from data import *
+import wandb
 
 # Constants
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -62,8 +63,10 @@ def set_seed(seed):
 
 def setup_experiment(args, logger):
     config_str = OmegaConf.to_yaml(args)
-    logger.info(f'Experiment started at: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+    start_time = datetime.now()
+    logger.info(f'Experiment started at: {start_time.strftime("%Y-%m-%d %H:%M:%S")}')
     logger.info('Configuration:\n' + config_str)
+    return start_time
 
 def log_model_info(model, args, logger):
     params, names = hf_collect_params(model)
@@ -79,9 +82,10 @@ def plot_losses(step_loss, p_loss_list, count, args):
     ax.set_ylabel('Loss', color='tab:red')
     ax.plot(step_loss, color='tab:red', marker='o')
     
-    ax2 = ax.twinx()
-    ax2.set_ylabel('P Loss', color='tab:blue')
-    ax2.plot(p_loss_list, color='tab:blue', marker='o')
+    if 'p_loss' in args.objective_f:
+        ax2 = ax.twinx()
+        ax2.set_ylabel('P Loss', color='tab:blue')
+        ax2.plot(p_loss_list, color='tab:blue', marker='o')
     
     plt.title(f'Loss Trajectory - Sample {count}')
     plt.savefig(f'{args.exp_name}/figs/suta_{count}.png')
@@ -110,6 +114,8 @@ def process_batch(batch, model, processor, normalizer, args, optimizer, schedule
     transcription = normalizer(transcription)
     error_metric = wer(label, transcription) if args.task == "transcribe" else sentence_bleu([label], transcription)
     result_logger.info(f'ori({error_metric:.5f}):{transcription}')
+    if args.use_wandb:
+        wandb.log({"ori_error": error_metric, "transcription": transcription})
 
     if args.tta:
         for step in range(args.steps):
@@ -127,6 +133,8 @@ def process_batch(batch, model, processor, normalizer, args, optimizer, schedule
                 transcription = normalizer(transcription)
                 adapt_error = wer(label, transcription) if args.task == "transcribe" else sentence_bleu([label], transcription)
                 result_logger.info(f'step{step}({adapt_error:.5f}): {transcription}')
+                if args.use_wandb:
+                    wandb.log({"step": step, "adapt_error": adapt_error, "transcription": transcription})
             else:
                 outputs, loss, e_loss, p_loss = model.AED_suta(
                     input_features, args, optimizer,
@@ -138,7 +146,10 @@ def process_batch(batch, model, processor, normalizer, args, optimizer, schedule
                 )
             
             step_loss.append(loss.item())
-            p_loss_list.append(p_loss.item())
+            if 'p_loss' in args.objective_f:
+                p_loss_list.append(p_loss.item())
+            if args.use_wandb:
+                wandb.log({"step": step, "loss": loss.item(), "p_loss": p_loss.item() if 'p_loss' in args.objective_f else None})
 
         plot_losses(step_loss, p_loss_list, count, args)
         result_logger.info("=" * 40)
@@ -149,7 +160,10 @@ def main(args):
     args.exp_name = args.exp_name if args.exp_name else f'ex_data/{args.asr.split("/")[-1]}_{args.task}_{args.lang}'
     logger, result_logger = configure_logging(args.exp_name)
     set_seed(args.seed)
-    setup_experiment(args, logger)
+    start_time = setup_experiment(args, logger)
+    
+    if args.use_wandb:
+        wandb.init(project="TTA_research", name=args.exp_name)
     
     # Load dataset and model
     normalizer = EnglishTextNormalizer()
@@ -168,7 +182,6 @@ def main(args):
     # Log model information
     log_model_info(model, args, logger)
     
-
     # Process batches
     for count, batch in tqdm(enumerate(dataset)):
         if args.num_data and count > args.num_data:
@@ -202,13 +215,19 @@ def main(args):
         logger.error("Failed to process results log: %s", str(e))
 
     # Finalize experiment
-    logger.info(f'Experiment completed at: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+    end_time = datetime.now()
+    logger.info(f'Experiment completed at: {end_time.strftime("%Y-%m-%d %H:%M:%S")}')
+    logger.info(f'Running time: {end_time - start_time}')
     
     # Close file handlers
     for handler in logger.handlers + result_logger.handlers:
         handler.close()
         logger.removeHandler(handler)
         result_logger.removeHandler(handler)
+
+    # Finish wandb run
+    if args.use_wandb:
+        wandb.finish()
 
 if __name__ == '__main__':
     main()

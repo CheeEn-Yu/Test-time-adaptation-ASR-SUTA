@@ -126,7 +126,7 @@ class WhisperTTADecoder(WhisperForConditionalGeneration):
                 next_token = next_token_logits.argmax(dim=-1, keepdim=True)
                 # Append the predicted next token
                 generated_ids = torch.cat((generated_ids, next_token), dim=1)
-            topk_logits = torch.topk(outputs.logits, k=args.topk).values.squeeze(0)
+            topk_logits = outputs.logits if not args.topk else torch.topk(outputs.logits, k=args.topk).values.squeeze(0)
             # Don't calculate tag token entropy
             topk_logits = topk_logits[4:, :]
             topk_logits = topk_logits/args.temp
@@ -159,6 +159,69 @@ class WhisperTTADecoder(WhisperForConditionalGeneration):
                 output = self.decode(inputs, forced_decoder_ids=forced_decoder_ids)
         
         return output, loss.detach().cpu(), e_loss, p_loss
+    
+    def tf_suta(self, inputs, args, optimizer, scheduler=None, teacher_token_list=None, max_length=100, generate_text=False, forced_decoder_ids=None, **generation_args):
+        """
+        SUTA algorithm that implements test-time adaptation (TTA) using teacher forcing.
+        """
+        optimizer.zero_grad()
+        loss = 0
+        e_loss = 0
+        p_loss = 0
+        num_suta_token = 0
+        e_loss_list = []
+        
+        # Initialize with start token
+        generated_ids = torch.tensor([[self.config.decoder_start_token_id]], device=inputs.device)
+        if forced_decoder_ids:
+            forced_token_ids = torch.tensor([token_id for _, token_id in forced_decoder_ids], device=inputs.device).unsqueeze(0)
+            generated_ids = torch.cat([generated_ids, forced_token_ids], dim=1)
+
+        if 'e_loss' in args.objective_f and teacher_token_list is not None:
+            # Use teacher forcing with teacher_token_list
+            for i in range(len(teacher_token_list[0])-1):  # -1 to exclude EOS token
+                num_suta_token += 1
+                # Use teacher tokens as input
+                decoder_input = teacher_token_list[:, :i+1]
+                outputs = self(input_features=inputs, decoder_input_ids=decoder_input)
+                
+                # Get logits for next token prediction
+                next_token_logits = outputs.logits[:, -1, :]
+                topk_logits = outputs.logits[:, -1, :] if not args.topk else torch.topk(outputs.logits[:, -1, :], k=args.topk).values
+                # Scale logits by temperature
+                topk_logits = topk_logits/args.temp
+                
+                # Calculate entropy loss
+                e_loss = softmax_entropy(topk_logits, dim=1)
+                if 'weighted' in args.objective_f:
+                    e_loss = (1/(1+args.alpha*torch.exp(-e_loss))) * e_loss
+                e_loss = e_loss.mean()
+                e_loss_list.append(e_loss.item())
+                loss += e_loss
+
+        if 'c_loss' in args.objective_f:
+            c_loss = mcc_loss(topk_logits, dim=1, class_num=args.topk)
+            loss = loss * args.em_coef + c_loss * (1 - args.em_coef)
+
+        if 'p_loss' in args.objective_f and teacher_token_list is not None:
+            criterion = nn.CrossEntropyLoss()
+            outputs = self(input_features=inputs, decoder_input_ids=teacher_token_list[:, :-1])
+            p_loss = criterion(outputs.logits.view(-1, outputs.logits.size(-1)), 
+                            teacher_token_list[:, 1:].reshape(-1))
+            loss += p_loss
+
+        loss.backward()
+        optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
+
+        output = generated_ids
+        if generate_text:
+            with torch.no_grad():
+                output = self.decode(inputs, forced_decoder_ids=forced_decoder_ids)
+        
+        return output, loss.detach().cpu(), e_loss, p_loss
+
 
 
 

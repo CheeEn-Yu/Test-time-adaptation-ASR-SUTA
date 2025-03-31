@@ -2,10 +2,18 @@ import torch
 torch.manual_seed(0)
 import torchaudio
 from functools import partial
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, DistributedSampler
 from datasets import load_dataset
 
 SAMPLE_RATE = 16000
+
+def multi_collate_fn(batch, processor):
+    audio_lengths, noisy_audios, translations, file_names = zip(*batch)
+
+    inputs = processor(noisy_audios[0], sampling_rate=16000, return_tensors="pt")
+    input_features = inputs.input_features
+
+    return audio_lengths, input_features, translations, file_names
 
 def collect_audio_batch(batch, extra_noise=0., maxLen=600000):
     '''Collects a batch, should be list of tuples (audio_path <str>, list of int token <list>) 
@@ -79,6 +87,10 @@ def create_dataset(split, name, path, batch_size=1, **kwargs):
         from corpus.covost2 import covost2Dataset as Dataset
         dataset = Dataset(split, batch_size, path, kwargs["lang"], kwargs["noise_dir"], kwargs["snr"])
         return dataset, loader_bs
+    elif name.lower() == "fleurs":
+        from corpus.fleurs import fleursDataset as Dataset
+        dataset = Dataset(split, batch_size, path, kwargs["lang"], kwargs["noise_dir"], kwargs["snr"], kwargs["task"])
+        return dataset, loader_bs
         
     else:
         raise NotImplementedError
@@ -89,28 +101,32 @@ def create_dataset(split, name, path, batch_size=1, **kwargs):
     return dataset, loader_bs
 
 
-def load_SUTAdataset(split=None, name='librispeech', path=None, batch_size=1, extra_noise=0., num_workers=4, noise_dir=None, snr=0., lang="en", **distributed_args):
+def load_SUTAdataset(split=None, name='librispeech', path=None, batch_size=1, extra_noise=0., num_workers=4, noise_dir=None, snr=0., lang="en", task='translation',is_multi_gpus=False, processor=None):
     ''' Prepare dataloader for training/validation'''
-    dataset, loader_bs = create_dataset(split, name, path, batch_size, noise_dir=noise_dir, snr=snr, lang=lang)
+    dataset, loader_bs = create_dataset(split, name, path, batch_size, noise_dir=noise_dir, snr=snr, lang=lang, task=task)
     collate_fn = None
-    if name.lower() != 'multilibri' and name.lower() != 'covost2':
+    if name.lower() != 'multilibri' and name.lower() != 'covost2' and name.lower() != 'fleurs':
         collate_fn = partial(collect_audio_batch, extra_noise=extra_noise)
 
     # Create DistributedSampler
-    if distributed_args:
-        sampler = torch.utils.data.distributed.DistributedSampler(
-            dataset,
-            num_replicas=distributed_args['world_size'],
-            rank=distributed_args['rank'],
-            shuffle=False
+    if is_multi_gpus:
+        sampler = DistributedSampler(dataset)
+        my_collate_fn = partial(multi_collate_fn, processor=processor)
+        dataloader = DataLoader(
+            dataset, 
+            batch_size=1, 
+            sampler=sampler, 
+            num_workers=4, 
+            pin_memory=True,
+            collate_fn=my_collate_fn
         )
-
-    dataloader = DataLoader(
-        dataset,
-        batch_size=loader_bs, 
-        shuffle=False,
-        collate_fn=collate_fn, 
-        num_workers=num_workers, 
-    )
+    else:
+        dataloader = DataLoader(
+            dataset,
+            batch_size=loader_bs, 
+            shuffle=False,
+            collate_fn=collate_fn, 
+            num_workers=num_workers, 
+        )
          
     return dataloader

@@ -24,13 +24,6 @@ from data import *
 
 random.seed(42)
 
-def collate_fn(batch, processor):
-    audio_lengths, noisy_audios, translations, file_names = zip(*batch)
-
-    inputs = processor(noisy_audios[0], sampling_rate=16000, return_tensors="pt")
-    input_features = inputs.input_features
-
-    return audio_lengths, input_features, translations, file_names
 
 def setup_distributed():
     dist.init_process_group(backend='nccl')
@@ -122,8 +115,10 @@ def set_seed(seed):
 
 def setup_experiment(args, logger):
     config_str = OmegaConf.to_yaml(args)
-    logger.info(f'Experiment started at: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+    start_time = datetime.now()
+    logger.info(f'Experiment started at: {start_time.strftime("%Y-%m-%d %H:%M:%S")}')
     logger.info('Configuration:\n' + config_str)
+    return start_time
 
 def plot_losses(step_loss, p_loss_list, count, args, rank=None, world_size=None):
     """Modified plot function for parallel processing"""
@@ -132,9 +127,10 @@ def plot_losses(step_loss, p_loss_list, count, args, rank=None, world_size=None)
     ax.set_ylabel('Loss', color='tab:red')
     ax.plot(step_loss, color='tab:red', marker='o')
     
-    ax2 = ax.twinx()
-    ax2.set_ylabel('P Loss', color='tab:blue')
-    ax2.plot(p_loss_list, color='tab:blue', marker='o')
+    if 'p_loss' in args.objective_f:
+        ax2 = ax.twinx()
+        ax2.set_ylabel('P Loss', color='tab:blue')
+        ax2.plot(p_loss_list, color='tab:blue', marker='o')
     
     # Add rank info to filename
     idx = world_size*count+rank
@@ -176,7 +172,7 @@ def process_batch(batch, processor, normalizer, args, count, rank, world_size):
     if args.tta:
         for step in range(args.steps):
             if step % 3 == 0 or step == args.steps-1:
-                outputs, loss, e_loss, p_loss = model.AED_suta(
+                outputs, loss, e_loss, p_loss = model.tf_suta(
                     input_features, args, optimizer,
                     teacher_token_list=teacher_token_list,
                     forced_decoder_ids=processor.get_decoder_prompt_ids(
@@ -200,7 +196,9 @@ def process_batch(batch, processor, normalizer, args, count, rank, world_size):
                 )
             
             step_loss.append(loss.item())
-            p_loss_list.append(p_loss.item())
+            if "p_loss" in args.objective_f:
+                p_loss_list.append(p_loss.item())
+
 
         plot_losses(step_loss, p_loss_list, count, args, rank, world_size)
         result_str += "="*40
@@ -213,20 +211,31 @@ def main_worker(rank, world_size, args):
     setup_distributed()
     if rank == 0:
         logger, result_logger = configure_logging(args.exp_name)
-        setup_experiment(args, logger)
+        start_time = setup_experiment(args, logger)
     
-    dataset = Covost2Dataset(split='test', path=f'../TTA_LAS/covost2_{args.lang}', lang=args.lang, noise_dir="../res", snr=10.0)
     processor = AutoProcessor.from_pretrained(args.asr)
-    my_collate_fn = partial(collate_fn, processor=processor)
-    sampler = DistributedSampler(dataset)
-    dataloader = DataLoader(
-        dataset, 
-        batch_size=1, 
-        sampler=sampler, 
-        num_workers=4, 
-        pin_memory=True,
-        collate_fn=my_collate_fn
+    dataloader = load_SUTAdataset(
+        name=args.dataset_name,
+        path=args.dataset_dir,
+        batch_size=1,
+        lang=args.lang,
+        noise_dir=args.noise_dir,
+        snr=args.snr,
+        task=args.task,
+        is_multi_gpus=True,
+        processor=processor
     )
+    # dataset = Covost2Dataset(split='test', path=f'../TTA_LAS/covost2_{args.lang}', lang=args.lang, noise_dir="../res", snr=10.0)
+    # my_collate_fn = partial(collate_fn, processor=processor)
+    # sampler = DistributedSampler(dataset)
+    # dataloader = DataLoader(
+    #     dataset, 
+    #     batch_size=1, 
+    #     sampler=sampler, 
+    #     num_workers=4, 
+    #     pin_memory=True,
+    #     collate_fn=my_collate_fn
+    # )
     # Load dataset and model
     normalizer = EnglishTextNormalizer()
 
@@ -258,7 +267,9 @@ def main_worker(rank, world_size, args):
             logger.error("Failed to process results log: %s", str(e))
 
         # Finalize experiment
-        logger.info(f'Experiment completed at: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}')
+        end_time = datetime.now()
+        logger.info(f'Experiment completed at: {end_time.strftime("%Y-%m-%d %H:%M:%S")}')
+        logger.info(f'Running time: {end_time - start_time}')
         
         # Close file handlers
         for handler in logger.handlers + result_logger.handlers:
