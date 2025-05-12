@@ -4,7 +4,7 @@ task: translate # ["transcribe", "translation"]
 topk: 30  # the dimension be calculated entropy
 alpha: 10 # the power of weighted, larger => higher entropy token accounts more
 train_params: [feature, LN] # currently supported: feature -> CNN bias, LN (both encoder and decoder), ...
-objective_f: [e_loss, weighted, p_loss]     # [e_loss, c_loss, p_loss, weighted]
+objective_f: [e_loss, weighted]     # [e_loss, c_loss, p_loss, weighted]
 steps: 10
 asr: openai/whisper-tiny
 asr_lang: nl
@@ -22,11 +22,13 @@ temp: 4.5 # temperature scaling
 em_coef: 0.5 # for balancing entropy minimization and minimum class confusion for baseline
 p_ratio: 1.0
 lr: 5e-4
+lr_scale: 1.0
+topk_layer: 3
 scheduler: null # null or CosineAnnealingLR
 t_max: 10
 lr_min: 1e-4
 ### dataset
-noise_dir: Gaussian # only for multilibri, currently supported: null, ../res 
+noise_dir: false # only for multilibri, currently supported: null, ../res 
 snr: 10 # only for multilibri
 dataset_name: covost2  # ['librispeech', 'noisylibri', 'multilibri'] for self-define noisy Librispeech (English only), use noisylibri
 dataset_dir: ../TTA_LAS/covost2_nl  # for multi librispeech dataset, this is lang: ['dutch', 'french', 'german', 'italian', 'polish', 'portuguese', 'spanish']
@@ -36,3 +38,9 @@ batch_size: 1
 ### seed for reproductivity
 seed: 42
 device: cuda
+use_wandb: false
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null

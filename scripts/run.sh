@@ -1,30 +1,68 @@
 
-python main.py \
-    noise_dir='../res' \
-    asr='openai/whisper-tiny' \
-    dataset_dir=../TTA_LAS/covost2_it \
-    lang=it \
-    asr_lang=it \
-    num_data=false \
-    batch_size=1
+run_asr_pipeline() {
+    local asr_lang="$1"
+    local lang="$2"
+    local dataset_dir="../TTA_LAS/test"
 
-python main.py \
-    noise_dir='../res' \
-    asr='openai/whisper-base' \
-    dataset_dir=../TTA_LAS/covost2_it \
-    lang=it \
-    asr_lang=it \
-    num_data=false \
-    batch_size=1
+    for asr_model in "openai/whisper-tiny" "openai/whisper-base" "openai/whisper-small"; do
+        echo "run ASR model: $asr_model"
+        # python main.py \
+        torchrun --nnodes=1 --nproc_per_node=8 main_multi_gpus.py \
+            task="transcribe" \
+            asr="$asr_model" \
+            dataset_name="fleurs" \
+            dataset_dir="$dataset_dir" \
+            lang="$lang" \
+            asr_lang="$asr_lang" \
+            temp=4.0 \
+            noise_dir="Gaussian" \
+            batch_size=1
+            # exp_name="ex_data/english_analysis" \
+            # num_data=false \
+        
+    done
+}
 
-python main.py \
-    noise_dir='../res' \
-    asr='openai/whisper-small' \
-    dataset_dir=../TTA_LAS/covost2_it \
-    lang=it \
-    asr_lang=it \
-    num_data=false \
-    batch_size=1
+run_asr_pipeline "en" "en"
+
+
+# python main.py \
+#     noise_dir='../res' \
+#     exp_name='./ex_data/fleurs_hi' \
+#     dataset_name='fleurs' \
+#     asr='openai/whisper-small' \
+#     dataset_dir='./fleurs_with_translation' \
+#     lang=hi_in \
+#     asr_lang=hi \
+#     num_data=100 \
+#     batch_size=1
+
+# python main.py \
+#     noise_dir='../res' \
+#     asr='openai/whisper-tiny' \
+#     dataset_dir=../TTA_LAS/covost2_it \
+#     lang=it \
+#     asr_lang=it \
+#     num_data=false \
+#     batch_size=1
+
+# python main.py \
+#     noise_dir='../res' \
+#     asr='openai/whisper-base' \
+#     dataset_dir=../TTA_LAS/covost2_it \
+#     lang=it \
+#     asr_lang=it \
+#     num_data=false \
+#     batch_size=1
+
+# python main.py \
+#     noise_dir='../res' \
+#     asr='openai/whisper-small' \
+#     dataset_dir=../TTA_LAS/covost2_it \
+#     lang=it \
+#     asr_lang=it \
+#     num_data=false \
+#     batch_size=1
 
 
 # python hf_main.py \

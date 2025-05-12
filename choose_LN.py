@@ -1,4 +1,5 @@
 import os
+import copy
 import logging
 import matplotlib.pyplot as plt
 import torch
@@ -7,11 +8,14 @@ from jiwer import wer
 from omegaconf import OmegaConf
 from whisper.normalizers import EnglishTextNormalizer
 from datetime import datetime
-from transformers import AutoProcessor, Speech2TextProcessor, Speech2TextForConditionalGeneration, AutoFeatureExtractor
+from transformers import AutoProcessor
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 from tqdm import tqdm
 from suta import *
 from data import *
+import logging
+
+logging.getLogger("accelerate.utils.modeling").setLevel(logging.ERROR)
 
 # Constants
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -90,6 +94,14 @@ def plot_losses(step_loss, p_loss_list, count, args):
     plt.savefig(f'{args.exp_name}/figs/suta_{count}.png')
     plt.close()
 
+def find_topk_norm_layers(diff_dict, k=3):
+    norms = {key: np.linalg.norm(vec) for key, vec in diff_dict.items()}
+    sorted_layers = sorted(norms.items(), key=lambda x: x[1], reverse=True)
+    
+    topk_layers = sorted_layers[:k]
+    topk_layers = {name: norm for name, norm in topk_layers}
+    return topk_layers  # 回傳 [(layer_name, norm), ...]
+
 def process_batch(batch, model, processor, normalizer, args, optimizer, scheduler, count, result_logger):
     c_loss_list, p_loss_list, step_loss = [], [], []
     lens, wavs, texts, files = batch
@@ -114,31 +126,74 @@ def process_batch(batch, model, processor, normalizer, args, optimizer, schedule
     error_metric = wer(label, transcription) if args.task == "transcribe" else sentence_bleu([label], transcription)
     result_logger.info(f'ori({error_metric:.5f}):{transcription}')
 
+    # copy original parameters
+    pre_adapt_state_dict = copy.deepcopy(model.state_dict())
+
+
     if args.tta:
-        for step in range(args.steps):
+        choose_layers_step = args.steps // 3
+        for step in range(choose_layers_step):
+            outputs, loss, e_loss, p_loss = model.AED_suta(
+                input_features, args, optimizer,
+                teacher_token_list=teacher_token_list,
+                forced_decoder_ids=processor.get_decoder_prompt_ids(
+                    language=args.asr_lang,
+                    task=args.task
+                ),
+                generate_text=False
+            )
+        post_adapt_state_dict = copy.deepcopy(model.state_dict())
+        layer_norm_diff = {}
+        relative_changes = {}
+        for name in pre_adapt_state_dict:
+            if 'layer_norm' in name:
+                diff = post_adapt_state_dict[name] - pre_adapt_state_dict[name]
+                layer_norm_diff[name] = diff.cpu().numpy().flatten()
+                original = pre_adapt_state_dict[name].cpu().numpy().flatten()
+                original_norm = np.linalg.norm(original)
+                diff_norm = np.linalg.norm(layer_norm_diff[name])
+                # Calculate relative change (avoid division by zero)
+                if original_norm > 0:
+                    relative_changes[name] = diff_norm / original_norm
+                else:
+                    relative_changes[name] = diff_norm  # Fallback to absolute change
+        topk_layers = find_topk_norm_layers(relative_changes, k=3)
+        # log topk_layers
+        result_logger.info(f'Topk layers: {topk_layers}')
+        # collect fine-tuned parameters with topk layers
+        for param in model.parameters():
+            param.requires_grad = False
+        params, names = [], []
+        for name, param in model.named_parameters():
+            if name in topk_layers.keys():
+                param.requires_grad = True
+                params.append(param)
+                names.append(name)
+                result_logger.info(f'Choose layer {name}')
+        optimizer, scheduler = setup_optimizer(
+            args,
+            params,
+            args.opt,
+            args.lr,
+            weight_decay=1e-5,
+            scheduler=args.scheduler
+        )
+            
+        for step in range(choose_layers_step, args.steps):
+            outputs, loss, e_loss, p_loss = model.AED_suta(
+                input_features, args, optimizer,
+                teacher_token_list=teacher_token_list,
+                forced_decoder_ids=processor.get_decoder_prompt_ids(
+                    language=args.asr_lang,
+                    task=args.task
+                ),
+                generate_text=(step % 3 == 0 or step == args.steps-1)
+            )
             if step % 3 == 0 or step == args.steps-1:
-                outputs, loss, e_loss, p_loss = model.AED_suta(
-                    input_features, args, optimizer,
-                    teacher_token_list=teacher_token_list,
-                    forced_decoder_ids=processor.get_decoder_prompt_ids(
-                        language=args.asr_lang,
-                        task=args.task
-                    ),
-                    generate_text=True
-                )
                 transcription = processor.batch_decode(outputs, skip_special_tokens=True)[0]
                 transcription = normalizer(transcription)
                 adapt_error = wer(label, transcription) if args.task == "transcribe" else sentence_bleu([label], transcription)
                 result_logger.info(f'step{step}({adapt_error:.5f}): {transcription}')
-            else:
-                outputs, loss, e_loss, p_loss = model.AED_suta(
-                    input_features, args, optimizer,
-                    teacher_token_list=teacher_token_list,
-                    forced_decoder_ids=processor.get_decoder_prompt_ids(
-                        language=args.asr_lang,
-                        task=args.task
-                    )
-                )
             
             step_loss.append(loss.item())
             if 'p_loss' in args.objective_f:
@@ -183,7 +238,7 @@ def main(args):
             args,
             hf_collect_params(model, args.encoderLN, args.decoderLN)[0],
             args.opt,
-            args.lr,
+            args.lr_scale * args.lr,
             weight_decay=1e-5,
             scheduler=args.scheduler
         )

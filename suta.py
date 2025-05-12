@@ -737,22 +737,51 @@ class transcriptionProcessor:
     def get_data(self):
         return self.data
 
-def hf_collect_params(model):
+def hf_collect_params(model, encoderLN=True, decoderLN=False, train_feature=False, all_encoder=False):
+    """
+    Collect trainable parameters from the model based on specified arguments.
+    
+    Args:
+        model: The Hugging Face model
+        encoderLN: Whether to train encoder layer norm parameters
+        decoderLN: Whether to train decoder layer norm parameters
+        train_feature: Whether to train feature extractor parameters (conv layers bias)
+        all_encoder: Whether to train all encoder parameters
+        
+    Returns:
+        params: List of trainable parameters
+        names: List of parameter names
+    """
     params, names = [], []
+    
+    # First, disable gradients for all parameters
     for param in model.parameters():
         param.requires_grad = False
+    
+    # Collect parameters based on configuration
     for name, param in model.named_parameters():
-        if "layer_norm" in name or "LayerNorm" in name:
+        parts = name.split('.')
+        
+        # Handle all encoder parameters if requested
+        if all_encoder and 'encoder' in parts:
+            param.requires_grad = True
             params.append(param)
             names.append(name)
+            continue
+            
+        # Handle layer norm parameters
+        if "layer_norm" in name or "LayerNorm" in name:
+            if ('encoder' in parts and encoderLN) or ('decoder' in parts and decoderLN):
+                param.requires_grad = True
+                params.append(param)
+                names.append(name)
+                
+        # Handle feature extraction parameters (conv layers)
+        elif train_feature and ('conv1' in name or 'conv2' in name) and 'bias' in name:
             param.requires_grad = True
-        # elif "conv1" in name or "conv2" in name:
-        #     if "bias" in name:
-        #         params.append(param)
-        #         names.append(name)
-        #         param.requires_grad = True
-
-
+            params.append(param)
+            names.append(name)
+            
     return params, names
 
 
