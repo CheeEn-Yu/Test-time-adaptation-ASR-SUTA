@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torch import nn
 from tqdm import tqdm
 from jiwer import wer
-from data import *
+from utils.data import *
 from suta import *
 import hydra
 from omegaconf import OmegaConf

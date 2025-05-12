@@ -11,7 +11,7 @@ from transformers import AutoProcessor
 from nltk.translate.bleu_score import sentence_bleu
 from tqdm import tqdm
 from suta import *
-from data import *
+from utils.data import *
 
 
 @hydra.main(version_base=None, config_path=".", config_name="config")

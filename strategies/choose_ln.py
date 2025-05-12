@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from jiwer import wer
 from nltk.translate.bleu_score import sentence_bleu
 
-from strategies import BaseAdaptationStrategy
+from .base import BaseAdaptationStrategy
 
 class ChooseLNStrategy(BaseAdaptationStrategy):
     """Strategy that adapts by selecting top-k layer norms to update."""
@@ -96,9 +96,9 @@ class ChooseLNStrategy(BaseAdaptationStrategy):
                     if original_norm > 0:
                         relative_changes[name] = diff_norm / original_norm
                     else:
-                        relative_changes[naTest-time-adaptation-ASR-SUTA/strategiesme] = diff_norm  # Fallback to absolute change
+                        relative_changes[name] = diff_norm  # Fallback to absolute change
                         
-            topk_layers = self.find_topk_norm_layers(relative_changes, k=self.k)
+            topk_layers = self.find_topk_norm_layers(relative_changes, k=args.topk_layer)
             result_logger.info(f'Topk layers: {topk_layers}')
             
             # Phase 2: Fine-tune selected layers only
@@ -117,7 +117,7 @@ class ChooseLNStrategy(BaseAdaptationStrategy):
                 args,
                 params,
                 args.opt,
-                args.lr,
+                args.lr_scale * args.lr,
                 weight_decay=1e-5,
                 scheduler=args.scheduler
             )

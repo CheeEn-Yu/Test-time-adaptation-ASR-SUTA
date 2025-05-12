@@ -16,7 +16,7 @@ from whisper.audio import (
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 from tqdm import tqdm
 from suta import *
-from data import *
+from utils.data import *
 # from timeit import default_timer
 
 

@@ -27,7 +27,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 from jiwer import wer
 
-from data import *
+from utils.data import *
 from suta import *
 from omegaconf import OmegaConf
 args = OmegaConf.load("config.yaml")

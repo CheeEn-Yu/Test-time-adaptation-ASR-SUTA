@@ -1,5 +1,5 @@
 from suta import *
-from data import *
+from utils.data import *
 
 def split_file_at_line(input_file_path, output_file1, output_file2, split_line=7118):
     """

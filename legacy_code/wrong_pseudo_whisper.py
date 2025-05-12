@@ -15,7 +15,7 @@ from whisper.audio import (
 )
 from tqdm import tqdm
 from suta import *
-from data import *
+from utils.data import *
 
 seed = 42
 torch.backends.cudnn.deterministic = True
